@@ -1,0 +1,15 @@
+venv*
+__pycache__
+.ipynb_checkpoints
+*.pth
+*.egg-info
+*_demo_*.png
+wandb/*
+*.csv
+.env
+.venv
+*.safetensors
+*.json
+
+datasets
+ckpts
