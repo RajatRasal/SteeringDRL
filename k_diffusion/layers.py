@@ -52,14 +52,21 @@ class Denoiser(nn.Module):
         self.scales = scales
         if callable(weighting):
             self.weighting = weighting
-        if weighting == 'karras':
+        if weighting == 'none':
             self.weighting = torch.ones_like
+        elif weighting == 'karras':
+            self.weighting = self._karras
         elif weighting == 'soft-min-snr':
             self.weighting = self._weighting_soft_min_snr
         elif weighting == 'snr':
             self.weighting = self._weighting_snr
         else:
             raise ValueError(f'Unknown weighting type {weighting}')
+    
+    def _karras(self, sigma):
+        # TODO: Why is _weighting_soft_min_snr the inverse of _karras?
+        # Note: Karras is my implementation of the EDM paper
+        return (sigma ** 2 + self.sigma_data ** 2) / (sigma * self.sigma_data) ** 2
 
     def _weighting_soft_min_snr(self, sigma):
         return (sigma * self.sigma_data) ** 2 / (sigma ** 2 + self.sigma_data ** 2) ** 2
@@ -98,7 +105,7 @@ class DenoiserWithVariance(Denoiser):
         logvar = utils.append_dims(logvar, model_output.ndim)
         target = (input - c_skip * noised_input) / c_out
         losses = ((model_output - target) ** 2 / logvar.exp() + logvar) / 2
-        return losses.flatten(1).mean(1)
+        return losses.flatten(1).mean(1) * self.weighting(sigma)
 
 
 class SimpleLossDenoiser(Denoiser):
@@ -108,7 +115,16 @@ class SimpleLossDenoiser(Denoiser):
         noised_input = input + noise * utils.append_dims(sigma, input.ndim)
         denoised = self(noised_input, sigma, **kwargs)
         eps = sampling.to_d(noised_input, sigma, denoised)
-        return (eps - noise).pow(2).flatten(1).mean(1)
+        return (eps - noise).pow(2).flatten(1).mean(1) * self.weighting(sigma)
+
+
+class SimpleLossXDenoiser(Denoiser):
+    """L_simple with the Karras et al. preconditioner."""
+
+    def loss(self, input, noise, sigma, **kwargs):
+        noised_input = input + noise * utils.append_dims(sigma, input.ndim)
+        denoised = self(noised_input, sigma, **kwargs)
+        return (denoised - input).pow(2).flatten(1).mean(1) * self.weighting(sigma)
 
 
 # Residual blocks
@@ -296,10 +312,11 @@ class FourierFeatures(nn.Module):
 # U-Nets
 
 class UNet(ConditionedModule):
-    def __init__(self, d_blocks, u_blocks, skip_stages=0):
+    def __init__(self, d_blocks, u_blocks, mid_block=None, skip_stages=0):
         super().__init__()
         self.d_blocks = nn.ModuleList(d_blocks)
         self.u_blocks = nn.ModuleList(u_blocks)
+        self.mid_block = mid_block
         self.skip_stages = skip_stages
 
     def forward(self, input, cond):
@@ -307,6 +324,9 @@ class UNet(ConditionedModule):
         for block in self.d_blocks[self.skip_stages:]:
             input = block(input, cond)
             skips.append(input)
+        if self.mid_block is not None:
+            input = self.mid_block(input, cond)
         for i, (block, skip) in enumerate(zip(self.u_blocks, reversed(skips))):
             input = block(input, cond, skip if i > 0 else None)
         return input
+

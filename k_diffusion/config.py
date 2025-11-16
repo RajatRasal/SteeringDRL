@@ -119,7 +119,7 @@ def load_config(path_or_dict):
             config = json.loads(file.read_text())
     else:
         config = path_or_dict
-    if config['model']['type'] == 'image_v1':
+    if config['model']['type'] in ['image_v1', 'image_v2']:
         config = merge(defaults_image_v1, config)
     elif config['model']['type'] == 'image_transformer_v1':
         config = merge(defaults_image_transformer_v1, config)
@@ -152,8 +152,13 @@ def make_model(config):
     dataset_config = config['dataset']
     num_classes = dataset_config['num_classes']
     config = config['model']
-    if config['type'] == 'image_v1':
-        model = models.ImageDenoiserModelV1(
+    if config['type'].startswith('image_v'):
+        model_classes = {
+            'image_v1': models.ImageDenoiserModelV1,
+            'image_v2': models.ImageDenoiserModelV2,
+        }
+        # model = models.ImageDenoiserModelV1(
+        model = model_classes[config['type']](
             config['input_channels'],
             config['mapping_out'],
             config['depths'],
@@ -239,7 +244,7 @@ def make_encoder(config):
 
 
 VQVAE_CKPT_PATHS = {
-    "shapes3d": "ckpts/2_shapes3d_True_32_128_5e-05/training-state-030000.pkl",
+    "shapes3d": "ckpts/vqvae/2_shapes3d_True_32_128_5e-05/training-state-030000.pkl",
 }
 
 def make_vqvae(config):
@@ -258,20 +263,30 @@ def make_denoiser_wrapper(config):
     sigma_data = config.get('sigma_data', 1.)
     has_variance = config.get('has_variance', False)
     loss_config = config.get('loss_config', 'karras')
-    if loss_config == 'karras':
+    if loss_config.startswith('karras_'):
         weighting = config.get('loss_weighting', 'karras')
         scales = config.get('loss_scales', 1)
-        if not has_variance:
+        if has_variance:
+            return partial(layers.DenoiserWithVariance, sigma_data=sigma_data, weighting=weighting)
+        if loss_config == 'karras_x':
+            return partial(layers.SimpleLossXDenoiser, sigma_data=sigma_data, weighting=weighting, scales=scales)
+        elif loss_config == 'karras_eps':
+            return partial(layers.SimpleLossDenoiser, sigma_data=sigma_data, weighting=weighting, scales=scales)
+        elif loss_config == 'karras_f':
             return partial(layers.Denoiser, sigma_data=sigma_data, weighting=weighting, scales=scales)
-        return partial(layers.DenoiserWithVariance, sigma_data=sigma_data, weighting=weighting)
     if loss_config == 'simple':
         if has_variance:
             raise ValueError('Simple loss config does not support a variance output')
         return partial(layers.SimpleLossDenoiser, sigma_data=sigma_data)
-    if loss_config == 'vp_eps':
+    if loss_config.startswith('vp_'):
         if has_variance:
             raise ValueError('VP config does not support a variance output')
-        return external.ContinuousEpsDDPMDenoiser
+        if loss_config == 'vp_eps':
+            return external.ContinuousEpsDDPMDenoiser
+        elif loss_config == 'vp_v':
+            return external.ContinuousVDDPMDenoiser
+        elif loss_config == 'vp_x':
+            return external.ContinuousXDDPMDenoiser
     raise ValueError('Unknown loss config type')
 
 

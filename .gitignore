@@ -10,6 +10,8 @@ wandb/*
 .venv
 *.safetensors
 *.json
+slurm_logs*
+*.png
 
 datasets
 ckpts

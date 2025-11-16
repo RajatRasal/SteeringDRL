@@ -206,6 +206,7 @@ def main():
         extra_args = {'cross_cond': conds, 'cross_cond_padding': torch.zeros_like(conds[..., 0], dtype=torch.bool)}
         inner_model(x_latent, sigma, **extra_args)
         print(f"Forward pass GFLOPs: {fc.flops / 1_000_000_000:,.3f}", flush=True)
+    # exit()
 
     if use_wandb:
         wandb.watch(inner_model)
@@ -305,8 +306,7 @@ def main():
             extra_args = {'cross_cond': conds, 'cross_cond_padding': torch.zeros_like(conds[..., 0], dtype=torch.bool)}
             # recon = K.sampling.sample_dpmpp_2m_sde(model_ema, x, sigmas, extra_args=extra_args, eta=1.0, solver_type='heun', disable=True)
             recon = K.sampling.sample_dpm_2(model_ema, x, sigmas, extra_args=extra_args, s_noise=s_noise, disable=True)
-            # TODO: Do I want to clip recon latents before or after upsampling?
-            recon = vqvae.quantize_decode(recon).clip(-1, 1)
+            recon = vqvae.quantize_decode(recon.clamp(-1, 1)).clamp(-1, 1)
 
             recon_grid = utils.make_grid(
                 K.utils.unnormalise(recon),
@@ -340,8 +340,7 @@ def main():
         x = torch.randn([args.sample_n, model_config['input_channels'], size[0], size[1]], generator=demo_gen).to(device) * sigmas[0]
         extra_args = {'cross_cond': conds, 'cross_cond_padding': torch.zeros_like(conds[..., 0], dtype=torch.bool)}
         recon = K.sampling.sample_dpm_2(model_ema, x, sigmas, extra_args=extra_args, s_noise=s_noise, disable=True)
-        # TODO: Do I want to clip recon latents before or after upsampling?
-        recon = vqvae.quantize_decode(recon).clip(-1, 1)
+        recon = vqvae.quantize_decode(recon.clamp(-1, 1)).clamp(-1, 1)
 
         recon_grid = utils.make_grid(
             K.utils.unnormalise(recon),
@@ -399,7 +398,7 @@ def main():
                 x = torch.randn([args.sample_n, model_config['input_channels'], size[0], size[1]], generator=demo_gen).to(device) * sigmas[0]
                 extra_args = {'cross_cond': edit_conds, 'cross_cond_padding': torch.zeros_like(edit_conds[..., 0], dtype=torch.bool)}
                 edit = K.sampling.sample_dpm_2(model_ema, x, sigmas, extra_args=extra_args, s_noise=s_noise, disable=True)
-                edits.append(vqvae.quantize_decode(edit).clip(-1, 1))
+                edits.append(vqvae.quantize_decode(edit.clamp(-1, 1)).clamp(-1, 1))
             summary_edits = [
                 images,
                 tgt_image.repeat(args.sample_n, 1, 1, 1),
@@ -430,7 +429,7 @@ def main():
             x = torch.randn([args.sample_n, model_config['input_channels'], size[0], size[1]], generator=demo_gen).to(device) * sigmas[0]
             extra_args = {'cross_cond': edit_conds, 'cross_cond_padding': torch.zeros_like(edit_conds[..., 0], dtype=torch.bool)}
             edit = K.sampling.sample_dpm_2(model_ema, x, sigmas, extra_args=extra_args, s_noise=s_noise, disable=True)
-            edits.append(vqvae.quantize_decode(edit).clip(-1, 1))
+            edits.append(vqvae.quantize_decode(edit.clamp(-1, 1)).clamp(-1, 1))
         summary_edits = [
             images,
             tgt_image.repeat(args.sample_n, 1, 1, 1),
@@ -496,19 +495,8 @@ def main():
 
             extra_args = {'cross_cond': conds, 'cross_cond_padding': torch.zeros_like(conds[..., 0], dtype=torch.bool)}
             noise = torch.randn([args.batch_size, model_config['input_channels'], size[0], size[1]], device=device) * sigma_max
-            # recon = K.sampling.sample_dpmpp_2m_sde(
-            #     model_ema,
-            #     noise,
-            #     sigmas,
-            #     extra_args=extra_args,
-            #     eta=1.0,
-            #     solver_type='heun',
-            #     disable=True,
-            # )
             recon = K.sampling.sample_dpm_2(model_ema, noise, sigmas, extra_args=extra_args, s_noise=s_noise, disable=True)
-
-            # TODO: Do I want to clip recon latents before or after upsampling?
-            recon = vqvae.quantize_decode(recon).clip(-1, 1)
+            recon = vqvae.quantize_decode(recon.clamp(-1, 1)).clamp(-1, 1)
 
             mse_ = K.evaluation.mse_metric(
                 K.utils.unnormalise(imgs),

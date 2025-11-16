@@ -204,3 +204,58 @@ class ContinuousEpsDDPMDenoiser(nn.Module):
         c_out, c_in = [utils.append_dims(x, input.ndim) for x in self.get_scalings(sigma)]
         eps = self.get_eps(input * c_in, sigma, **kwargs)
         return input + eps * c_out
+
+
+class ContinuousXDDPMDenoiser(nn.Module):
+    """A wrapper for discrete schedule DDPM models that output eps (the predicted
+    noise)."""
+    # NOTE THIS IS WRONG
+
+    def __init__(self, model):
+        super().__init__()
+        self.inner_model = model
+        self.sigma_data = 1.
+
+    def get_scalings(self, sigma):
+        c_out = -sigma
+        c_in = 1 / (sigma ** 2 + self.sigma_data ** 2) ** 0.5
+        return c_out, c_in
+
+    def loss(self, input, noise, sigma, **kwargs):
+        c_out, c_in = [utils.append_dims(x, input.ndim) for x in self.get_scalings(sigma)]
+        noised_input = input + noise * utils.append_dims(sigma, input.ndim)
+        model_output = self.inner_model(noised_input * c_in, sigma, **kwargs)
+        return (model_output - input).pow(2).flatten(1).mean(1)
+
+    def forward(self, input, sigma, **kwargs):
+        c_out, c_in = [utils.append_dims(x, input.ndim) for x in self.get_scalings(sigma)]
+        return self.inner_model(input * c_in, sigma, **kwargs)
+
+
+class ContinuousVDDPMDenoiser(nn.Module):
+    """A wrapper for discrete schedule DDPM models that output v."""
+
+    def __init__(self, model):
+        super().__init__()
+        self.inner_model = model
+        self.sigma_data = 1.
+
+    def get_scalings(self, sigma):
+        c_skip = self.sigma_data ** 2 / (sigma ** 2 + self.sigma_data ** 2)
+        c_out = -sigma * self.sigma_data / (sigma ** 2 + self.sigma_data ** 2) ** 0.5
+        c_in = 1 / (sigma ** 2 + self.sigma_data ** 2) ** 0.5
+        return c_skip, c_out, c_in
+
+    def get_v(self, *args, **kwargs):
+        return self.inner_model(*args, **kwargs)
+
+    def loss(self, input, noise, sigma, **kwargs):
+        c_skip, c_out, c_in = [utils.append_dims(x, input.ndim) for x in self.get_scalings(sigma)]
+        noised_input = input + noise * utils.append_dims(sigma, input.ndim)
+        model_output = self.get_v(noised_input * c_in, sigma, **kwargs)
+        target = (input - c_skip * noised_input) / c_out
+        return (model_output - target).pow(2).flatten(1).mean(1)
+
+    def forward(self, input, sigma, **kwargs):
+        c_skip, c_out, c_in = [utils.append_dims(x, input.ndim) for x in self.get_scalings(sigma)]
+        return self.get_v(input * c_in, sigma, **kwargs) * c_out + input * c_skip
