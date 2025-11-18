@@ -8,6 +8,7 @@ import math
 import json
 from pathlib import Path
 import time
+import shutil
 import numpy as np
 
 import safetensors.torch as safetorch
@@ -15,7 +16,6 @@ import torch
 import torch._dynamo
 from torch import multiprocessing as mp
 from torch import optim
-from torch.utils import data, flop_counter
 from torchvision import utils
 from tqdm.auto import tqdm
 from torch.utils.data import DataLoader, StackDataset, TensorDataset
@@ -51,6 +51,8 @@ def main():
                    help='the learning rate')
     p.add_argument('--mixed-precision', type=str,
                    help='the mixed precision type')
+    p.add_argument('--exp-name', type=str, default='exp',
+                   help='the name of the experiment group')
     p.add_argument('--name', type=str, default='model',
                    help='the name of the run')
     p.add_argument('--num-workers', type=int, default=8,
@@ -86,6 +88,7 @@ def main():
         torch._dynamo.config.automatic_dynamic_shapes = False
     except AttributeError:
         pass
+    device = torch.device("cuda")
 
     config = K.config.load_config(args.config)
     model_config = config['model']
@@ -95,13 +98,23 @@ def main():
     ema_sched_config = config['ema_sched']
     encoder_config = config['encoder']
 
-    # TODO: allow non-square input sizes
+    # Set up run directory structure: <cwd>/ckpts/<name>/{checkpoints,images,configs}
+    run_dir = Path(f'ckpts/{args.exp_name}') / args.name
+    checkpoints_dir = run_dir / 'checkpoints'
+    images_dir = run_dir / 'images'
+    configs_dir = run_dir / 'configs'
+    run_dir.mkdir(parents=True, exist_ok=False)
+    checkpoints_dir.mkdir(parents=True, exist_ok=False)
+    images_dir.mkdir(parents=True, exist_ok=False)
+    configs_dir.mkdir(parents=True, exist_ok=False)
+
+    # Store a copy of the launch config file alongside the run
+    cfg_path = Path(args.config)
+    if cfg_path.is_file():
+        shutil.copy2(cfg_path, configs_dir / cfg_path.name)
+
     assert len(model_config['input_size']) == 2 and model_config['input_size'][0] == model_config['input_size'][1]
     size = model_config['input_size']
-    size[0] = size[0] # int(size[0] / 4)
-    size[1] = size[1] # int(size[1] / 4)
-
-    device = torch.device("cuda")
 
     if args.seed is not None:
         torch.manual_seed(args.seed)
@@ -117,7 +130,11 @@ def main():
         inner_model.compile()
         encoder.compile()
 
-    print(f'Parameters: {K.utils.n_params(inner_model) + K.utils.n_params(encoder):,}')
+    vqvae_n_params = K.utils.n_params(vqvae)
+    unet_n_params = K.utils.n_params(inner_model)
+    encoder_n_params = K.utils.n_params(encoder)
+    total_n_params = vqvae_n_params + unet_n_params + encoder_n_params
+    print(f'Total Parameters: {total_n_params:,}, VQVAE Parameters: {vqvae_n_params:,}, Encoder Parameters: {encoder_n_params:,}, UNet Parameters: {unet_n_params:,}')
 
     use_wandb = args.wandb_project
     if use_wandb:
@@ -135,7 +152,7 @@ def main():
 
     lr = opt_config['lr'] if args.lr is None else args.lr
     groups = inner_model.param_groups(lr)
-    groups.append({"params": encoder.parameters(), "lr": lr})
+    groups.append({'params': encoder.parameters(), 'lr': lr})
     if opt_config['type'] == 'adamw':
         opt = optim.AdamW(
             groups,
@@ -204,9 +221,9 @@ def main():
         x_latent = torch.zeros([1, model_config['input_channels'], size[0], size[1]], device=device)
         sigma = torch.ones([1], device=device)
         extra_args = {'cross_cond': conds, 'cross_cond_padding': torch.zeros_like(conds[..., 0], dtype=torch.bool)}
-        inner_model(x_latent, sigma, **extra_args)
-        print(f"Forward pass GFLOPs: {fc.flops / 1_000_000_000:,.3f}", flush=True)
-    # exit()
+        out = inner_model(x_latent, sigma, **extra_args)
+        assert list(out.shape) == [1, model_config['input_channels'], size[0], size[1]]
+        print(f'Forward pass GFLOPs: {fc.flops / 1_000_000_000:,.3f}', flush=True)
 
     if use_wandb:
         wandb.watch(inner_model)
@@ -217,7 +234,7 @@ def main():
     model = K.config.make_denoiser_wrapper(config)(inner_model)
     model_ema = K.config.make_denoiser_wrapper(config)(inner_model_ema)
 
-    state_path = Path(f'{args.name}_state.json')
+    state_path = run_dir / 'state.json'
 
     if state_path.exists() or args.resume:
         if args.resume:
@@ -262,7 +279,7 @@ def main():
     if evaluate_enabled:
         extractor = lpips.LPIPS(net='vgg').to(device).to(torch.float32)
         metrics_log = K.utils.CSVLogger(
-            f'{args.name}_metrics.csv',
+            str(run_dir / 'metrics.csv'),
             ['nimgs', 'time', 'loss', 'mse', 'lpips', 'dci', 'factorvae', 'mig', 'betavae'],
         )
 
@@ -321,16 +338,16 @@ def main():
 
             fig, axes = plt.subplots(1, 2, figsize=(8, 4))
             axes[0].imshow(imgs_grid.permute(1, 2, 0).cpu().numpy())
-            axes[0].set_title("Original Images")
-            axes[0].axis("off")
+            axes[0].set_title('Original Images')
+            axes[0].axis('off')
         
             axes[1].imshow(recon_grid.permute(1, 2, 0).cpu().numpy())
-            axes[1].set_title("Reconstructed Images")
-            axes[1].axis("off")
+            axes[1].set_title('Reconstructed Images')
+            axes[1].axis('off')
 
             plt.tight_layout()
-            filename = f'{args.name}_recon_grid_karras_rho{rho}_{nimgs:08}.png'
-            plt.savefig(filename, bbox_inches="tight")
+            filename = str(images_dir / f'recon_grid_karras_rho{rho}_{nimgs:08}.png')
+            plt.savefig(filename, bbox_inches='tight')
             plt.close(fig)
 
             if use_wandb:
@@ -355,16 +372,16 @@ def main():
 
         fig, axes = plt.subplots(1, 2, figsize=(8, 4))
         axes[0].imshow(imgs_grid.permute(1, 2, 0).cpu().numpy())
-        axes[0].set_title("Original Images")
-        axes[0].axis("off")
+        axes[0].set_title('Original Images')
+        axes[0].axis('off')
         
         axes[1].imshow(recon_grid.permute(1, 2, 0).cpu().numpy())
-        axes[1].set_title("Reconstructed Images")
-        axes[1].axis("off")
+        axes[1].set_title('Reconstructed Images')
+        axes[1].axis('off')
 
         plt.tight_layout()
-        filename = f'{args.name}_recon_grid_vp_{nimgs:08}.png'
-        plt.savefig(filename, bbox_inches="tight")
+        filename = str(images_dir / f'recon_grid_vp_{nimgs:08}.png')
+        plt.savefig(filename, bbox_inches='tight')
         plt.close(fig)
 
         if use_wandb:
@@ -413,9 +430,9 @@ def main():
                 padding=0,
             )
 
-            filename = f'{args.name}_edits_grid_karras_rho{rho}_{nimgs:08}.png'
+            filename = str(images_dir / f'{args.name}_edits_grid_karras_rho{rho}_{nimgs:08}.png')
             plt.imshow(summary_edits_grid.permute(1, 2, 0).cpu().numpy())
-            plt.axis("off")
+            plt.axis('off')
             plt.tight_layout()
             plt.savefig(filename)
             plt.close()
@@ -444,9 +461,9 @@ def main():
             padding=0,
         )
 
-        filename = f'{args.name}_edits_grid_vp_{nimgs:08}.png'
+        filename = str(images_dir / f'{args.name}_edits_grid_vp_{nimgs:08}.png')
         plt.imshow(summary_edits_grid.permute(1, 2, 0).cpu().numpy())
-        plt.axis("off")
+        plt.axis('off')
         plt.tight_layout()
         plt.savefig(filename)
         plt.close()
@@ -483,8 +500,8 @@ def main():
         lpips = 0
 
         for data in tqdm(dl, total=len(dl)):
-            imgs = K.utils.normalise(data["image"][0].to(device).permute(0, 3, 1, 2))
-            labels = data["label"][0].to(device)
+            imgs = K.utils.normalise(data['image'][0].to(device).permute(0, 3, 1, 2))
+            labels = data['label'][0].to(device)
 
             if encoder_config['type'] == 'image':
                 conds = encoder(imgs)
@@ -514,7 +531,6 @@ def main():
         lpips = lpips / len(dl)
         tqdm.write(f'MSE: {mse.item():g}, LPIPS: {lpips.item():g}')
 
-        # TODO: Add disentanglement evaluation
         if encoder_config['type'] == 'image':
             dis_metrics = K.evaluation.evaluate_disentanglement(
                 encoder,
@@ -560,7 +576,7 @@ def main():
             )
 
     def save():
-        filename = f'{args.name}_{nimgs:08}.pth'
+        filename = str(checkpoints_dir / f'{args.name}_{nimgs:08}.pth')
         tqdm.write(f'Saving to {filename}...')
         inner_model = model.inner_model
         inner_model_ema = model_ema.inner_model
@@ -578,7 +594,7 @@ def main():
             'elapsed': elapsed,
         }
         torch.save(obj, filename)
-        state_obj = {'latest_checkpoint': filename}
+        state_obj = {'latest_checkpoint': str(filename)}
         json.dump(state_obj, open(state_path, 'w'))
         if args.wandb_save_model and use_wandb:
             wandb.save(filename)
@@ -631,12 +647,9 @@ def main():
             loss.backward()
             loss = loss.item()
             losses_since_last_print.append(loss)
-            # torch.nn.utils.clip_grad_norm_(model.parameters(), 1.)
-            # torch.nn.utils.clip_grad_norm_(encoder.parameters(), 1.)
             opt.step()
             sched.step()
             opt.zero_grad()
-            # exit()
 
             ema_decay = ema_sched.get_value()
             K.utils.ema_update_dict(ema_stats, {'loss': loss}, ema_decay ** (1 / args.grad_accum_steps))
@@ -672,7 +685,7 @@ def main():
             if evaluate_enabled and nimgs > 0 and (nimgs // args.batch_size) % args.evaluate_every == 0:
                 evaluate()
 
-            if (nimgs // args.batch_size) == args.end_nimgs or (nimgs > 0 and (nimgs // args.batch_size) % args.save_every == 0):
+            if nimgs == args.end_nimgs or (nimgs > 0 and (nimgs // args.batch_size) % args.save_every == 0):
                 save()
 
             if nimgs == args.end_nimgs:

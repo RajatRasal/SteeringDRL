@@ -1,5 +1,3 @@
-import math
-
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -42,6 +40,7 @@ class DBlock(layers.ConditionedSequential):
         attn_heads=None,
         dropout_rate=0.,
         downsample=False,
+        learned_downsample=False,
         self_attn=False,
         cross_attn=False,
         c_enc=0,
@@ -59,10 +58,17 @@ class DBlock(layers.ConditionedSequential):
                 norm = lambda c_in: layers.AdaGN(feats_in, c_in, max(1, my_c_out // group_size))
                 modules.append(layers.CrossAttention2d(my_c_out, c_enc, n_heads, norm, dropout_rate))
         super().__init__(*modules)
-        self.set_downsample(downsample)
+        self.set_downsample(downsample, learned_downsample, c_in)
 
-    def set_downsample(self, downsample):
-        self[0] = layers.Downsample2d() if downsample else nn.Identity()
+    def set_downsample(self, downsample, learned_downsample, ch):
+        if downsample:
+            if learned_downsample:
+                ds = layers.LearnedDownsample2d(ch)
+            else:
+                ds = layers.Downsample2d()
+        else:
+            ds = nn.Identity()
+        self[0] = ds
         return self
 
 
@@ -79,6 +85,7 @@ class UBlock(layers.ConditionedSequential):
         attn_heads=None,
         dropout_rate=0.,
         upsample=False,
+        learned_upsample=False,
         self_attn=False,
         cross_attn=False,
         c_enc=0,
@@ -97,15 +104,22 @@ class UBlock(layers.ConditionedSequential):
                 modules.append(layers.CrossAttention2d(my_c_out, c_enc, n_heads, norm, dropout_rate))
         modules.append(nn.Identity())
         super().__init__(*modules)
-        self.set_upsample(upsample)
+        self.set_upsample(upsample, learned_upsample, c_out)
 
     def forward(self, input, cond, skip=None):
         if skip is not None:
             input = torch.cat([input, skip], dim=1)
         return super().forward(input, cond)
 
-    def set_upsample(self, upsample):
-        self[-1] = layers.Upsample2d() if upsample else nn.Identity()
+    def set_upsample(self, upsample, learned_upsample, ch):
+        if upsample:
+            if learned_upsample:
+                us = layers.LearnedUpsample2d(ch)
+            else:
+                us = layers.Upsample2d()
+        else:
+            us = nn.Identity()
+        self[-1] = us
         return self
 
 
@@ -160,6 +174,9 @@ class ImageDenoiserModelV2(nn.Module):
         skip_stages=0,
         has_variance=False,
         n_heads=8,
+        learned_subsampling=False,
+        up_down_asymmetry=False,
+        use_mid_block=True,
     ):
         super().__init__()
         self.c_in = c_in
@@ -171,8 +188,16 @@ class ImageDenoiserModelV2(nn.Module):
         if mapping_cond_dim > 0:
             self.mapping_cond = nn.Linear(mapping_cond_dim, feats_in, bias=False)
         self.mapping = MappingNet(feats_in, feats_in)
-        self.proj_in = nn.Conv2d((c_in + unet_cond_dim) * self.patch_size ** 2, channels[max(0, skip_stages - 1)], 1)
-        self.proj_out = nn.Conv2d(channels[max(0, skip_stages - 1)], c_in * self.patch_size ** 2 + (1 if self.has_variance else 0), 1)
+        self.proj_in = nn.Conv2d(
+            (c_in + unet_cond_dim) * self.patch_size ** 2,
+            channels[max(0, skip_stages - 1)],
+            1,
+        )
+        self.proj_out = nn.Conv2d(
+            channels[max(0, skip_stages - 1)],
+            c_in * self.patch_size ** 2 + (1 if self.has_variance else 0),
+            1,
+        )
         nn.init.zeros_(self.proj_out.weight)
         nn.init.zeros_(self.proj_out.bias)
         if cross_cond_dim == 0:
@@ -180,7 +205,6 @@ class ImageDenoiserModelV2(nn.Module):
         d_blocks, u_blocks = [], []
         for i in range(len(depths)):
             my_c_in = channels[max(0, i - 1)]
-            print(my_c_in, channels[i], channels[i])
             d_blocks.append(
                 DBlock(
                     depths[i],
@@ -189,6 +213,7 @@ class ImageDenoiserModelV2(nn.Module):
                     c_mid=channels[i],
                     c_out=channels[i],
                     downsample=i > skip_stages and i != len(depths) - 1,
+                    learned_downsample=learned_subsampling,
                     self_attn=self_attn_depths[i],
                     cross_attn=cross_attn_depths[i],
                     c_enc=cross_cond_dim,
@@ -196,27 +221,29 @@ class ImageDenoiserModelV2(nn.Module):
                     attn_heads=n_heads,
                 )
             )
-        mid_block = BottleneckBlock(
-            feats_in,
-            channels[-1],
-            self_attn=True,
-            cross_attn=True,
-            c_enc=cross_cond_dim,
-            dropout_rate=dropout_rate,
-            attn_heads=n_heads,
-        )
+        mid_block = None
+        if use_mid_block:
+            mid_block = BottleneckBlock(
+                feats_in,
+                channels[-1],
+                self_attn=True,
+                cross_attn=True,
+                c_enc=cross_cond_dim,
+                dropout_rate=dropout_rate,
+                attn_heads=n_heads,
+            )
         for i in range(len(depths)):
             my_c_in = channels[i] * 2 if i < len(depths) - 1 else channels[i]
             my_c_out = channels[max(0, i - 1)]
-            print(my_c_in, channels[i], my_c_out)
             u_blocks.append(
                 UBlock(
-                    depths[i],
+                    depths[i] + 1 if up_down_asymmetry else depths[i],
                     feats_in,
                     c_in=my_c_in,
                     c_mid=channels[i],
                     c_out=my_c_out,
                     upsample=i > skip_stages and i != len(depths) - 1,
+                    learned_upsample=learned_subsampling,
                     self_attn=self_attn_depths[i],
                     cross_attn=cross_attn_depths[i],
                     c_enc=cross_cond_dim,
@@ -224,7 +251,12 @@ class ImageDenoiserModelV2(nn.Module):
                     attn_heads=n_heads,
                 )
             )
-        self.u_net = layers.UNet(d_blocks, reversed(u_blocks), mid_block=mid_block, skip_stages=skip_stages)
+        self.u_net = layers.UNet(
+            d_blocks,
+            reversed(u_blocks),
+            mid_block=mid_block,
+            skip_stages=skip_stages,
+        )
 
     def param_groups(self, base_lr=2e-4):
         wd_names = []

@@ -16,6 +16,9 @@
         "sigma_min": 1e-2,
         "sigma_max": 80,
         "augment_wrapper": false,
+        "learned_subsampling": false,
+        "up_down_asymmetry": false,
+        "use_mid_block": true,
         "sigma_sample_density": {
             "type": "loguniform",
             "min_value": 1e-2,

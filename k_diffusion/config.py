@@ -152,13 +152,8 @@ def make_model(config):
     dataset_config = config['dataset']
     num_classes = dataset_config['num_classes']
     config = config['model']
-    if config['type'].startswith('image_v'):
-        model_classes = {
-            'image_v1': models.ImageDenoiserModelV1,
-            'image_v2': models.ImageDenoiserModelV2,
-        }
-        # model = models.ImageDenoiserModelV1(
-        model = model_classes[config['type']](
+    if config['type'] == 'image_v1':
+        model = models.ImageDenoiserModelV1(
             config['input_channels'],
             config['mapping_out'],
             config['depths'],
@@ -172,6 +167,27 @@ def make_model(config):
             cross_cond_dim=config['cross_cond_dim'],
             skip_stages=config['skip_stages'],
             has_variance=config['has_variance'],
+        )
+        if config['augment_wrapper']:
+            model = augmentation.KarrasAugmentWrapper(model)
+    elif config['type'] == 'image_v2':
+        model = models.ImageDenoiserModelV2(
+            config['input_channels'],
+            config['mapping_out'],
+            config['depths'],
+            config['channels'],
+            config['self_attn_depths'],
+            config['cross_attn_depths'],
+            patch_size=config['patch_size'],
+            dropout_rate=config['dropout_rate'],
+            mapping_cond_dim=config['mapping_cond_dim'] + (9 if config['augment_wrapper'] else 0),
+            unet_cond_dim=config['unet_cond_dim'],
+            cross_cond_dim=config['cross_cond_dim'],
+            skip_stages=config['skip_stages'],
+            has_variance=config['has_variance'],
+            learned_subsampling=config['learned_subsampling'],
+            up_down_asymmetry=config['up_down_asymmetry'],
+            use_mid_block=config['use_mid_block'],
         )
         if config['augment_wrapper']:
             model = augmentation.KarrasAugmentWrapper(model)

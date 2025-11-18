@@ -2,7 +2,6 @@ from functools import lru_cache, reduce
 import math
 
 from dctorch import functional as df
-from einops import rearrange, repeat
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -280,6 +279,21 @@ class Downsample2d(nn.Module):
         return F.conv2d(x, weight, stride=2)
 
 
+class LearnedDownsample2d(nn.Module):
+    def __init__(self, channels):
+        super().__init__()
+        self.conv = nn.Conv2d(
+            in_channels=channels,
+            out_channels=channels,
+            kernel_size=3,
+            stride=2,
+            padding=1,
+        )
+
+    def forward(self, x):
+        return self.conv(x)
+
+
 class Upsample2d(nn.Module):
     def __init__(self, kernel='linear', pad_mode='reflect'):
         super().__init__()
@@ -294,6 +308,22 @@ class Upsample2d(nn.Module):
         indices = torch.arange(x.shape[1], device=x.device)
         weight[indices, indices] = self.kernel.to(weight)
         return F.conv_transpose2d(x, weight, stride=2, padding=self.pad * 2 + 1)
+
+
+class LearnedUpsample2d(nn.Module):
+    def __init__(self, channels):
+        super().__init__()
+        self.conv = nn.Conv2d(
+            in_channels=channels,
+            out_channels=channels,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+        )
+
+    def forward(self, x):
+        x = F.interpolate(x, scale_factor=2, mode='nearest')
+        return self.conv(x)
 
 
 # Embeddings
