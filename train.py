@@ -47,6 +47,8 @@ def main():
                    help='evaluate instead of training')
     p.add_argument('--grad-accum-steps', type=int, default=1,
                    help='the number of gradient accumulation steps')
+    p.add_argument('--gradient-clipping', action='store_true',
+                   help='Clip gradients of encoder and diffusion decoder to 1.0')
     p.add_argument('--lr', type=float,
                    help='the learning rate')
     p.add_argument('--mixed-precision', type=str,
@@ -124,6 +126,7 @@ def main():
     inner_model = K.config.make_model(config).to(device)
     inner_model_ema = deepcopy(inner_model)
     encoder = K.config.make_encoder(config).to(device)
+    encoder_ema = deepcopy(encoder)
     vqvae = K.config.make_vqvae(config).to(device)
 
     if args.compile:
@@ -247,6 +250,7 @@ def main():
         model.inner_model.load_state_dict(ckpt['model'])
         model_ema.inner_model.load_state_dict(ckpt['model_ema'])
         encoder.load_state_dict(ckpt['encoder'])
+        encoder_ema.load_state_dict(ckpt['encoder_ema'])
         opt.load_state_dict(ckpt['opt'])
         sched.load_state_dict(ckpt['sched'])
         ema_sched.load_state_dict(ckpt['ema_sched'])
@@ -300,7 +304,7 @@ def main():
 
     @torch.no_grad()
     @K.utils.eval_mode(model_ema)
-    @K.utils.eval_mode(encoder)
+    @K.utils.eval_mode(encoder_ema)
     def demo():
         tqdm.write('Sampling...')
 
@@ -311,9 +315,9 @@ def main():
         labels = torch.tensor(labels).to(torch.float32).to(device)
 
         if encoder_config['type'] == 'image':
-            conds = encoder(images)
+            conds = encoder_ema(images)
         elif encoder_config['type'] == 'label':
-            conds = encoder(labels)
+            conds = encoder_ema(labels)
         else:
             raise NotImplementedError()
 
@@ -392,8 +396,8 @@ def main():
         tgt_image = images[-1].unsqueeze(0)
         tgt_label = labels[-1].unsqueeze(0)
         if encoder_config['type'] == 'image':
-            src_conds = encoder.encoding(images)
-            tgt_conds = encoder.encoding(tgt_image)
+            src_conds = encoder_ema.encoding(images)
+            tgt_conds = encoder_ema.encoding(tgt_image)
         elif encoder_config['type'] == 'label':
             src_conds = labels
             tgt_conds = tgt_label
@@ -403,9 +407,9 @@ def main():
             edit_conds = src_conds.clone()
             edit_conds[:, i] = tgt_conds[0, i].clone()
             if encoder_config['type'] == 'image':
-                edit_conds = encoder.split_embedding(edit_conds)
+                edit_conds = encoder_ema.split_embedding(edit_conds)
             elif encoder_config['type'] == 'label':
-                edit_conds = encoder(edit_conds)
+                edit_conds = encoder_ema(edit_conds)
             edit_conds_list.append(edit_conds)
 
         for rho in [1., 3., 5., 7., 9.]:
@@ -473,7 +477,7 @@ def main():
 
     @torch.no_grad()
     @K.utils.eval_mode(model_ema)
-    @K.utils.eval_mode(encoder)
+    @K.utils.eval_mode(encoder_ema)
     def evaluate():
         if not evaluate_enabled:
             return
@@ -504,9 +508,9 @@ def main():
             labels = data['label'][0].to(device)
 
             if encoder_config['type'] == 'image':
-                conds = encoder(imgs)
+                conds = encoder_ema(imgs)
             elif encoder_config['type'] == 'label':
-                conds = encoder(labels)
+                conds = encoder_ema(labels)
             else:
                 raise NotImplementedError()
 
@@ -533,7 +537,7 @@ def main():
 
         if encoder_config['type'] == 'image':
             dis_metrics = K.evaluation.evaluate_disentanglement(
-                encoder,
+                encoder_ema,
                 dataset_obj,
                 True,
                 True,
@@ -585,6 +589,7 @@ def main():
             'model': inner_model.state_dict(),
             'model_ema': inner_model_ema.state_dict(),
             'encoder': encoder.state_dict(),
+            'encoder_ema': encoder_ema.state_dict(),
             'opt': opt.state_dict(),
             'sched': sched.state_dict(),
             'ema_sched': ema_sched.state_dict(),
@@ -645,8 +650,14 @@ def main():
                 losses = model.loss(reals, noise, sigma, **extra_args)
             loss = losses.mean()
             loss.backward()
+
+            if args.gradient_clipping:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                torch.nn.utils.clip_grad_norm_(encoder.parameters(), 1.0)
+
             loss = loss.item()
             losses_since_last_print.append(loss)
+
             opt.step()
             sched.step()
             opt.zero_grad()
@@ -654,6 +665,7 @@ def main():
             ema_decay = ema_sched.get_value()
             K.utils.ema_update_dict(ema_stats, {'loss': loss}, ema_decay ** (1 / args.grad_accum_steps))
             K.utils.ema_update(model, model_ema, ema_decay)
+            K.utils.ema_update(encoder, encoder_ema, ema_decay)
             ema_sched.step()
 
             if device.type == 'cuda':
@@ -685,7 +697,7 @@ def main():
             if evaluate_enabled and nimgs > 0 and (nimgs // args.batch_size) % args.evaluate_every == 0:
                 evaluate()
 
-            if nimgs == args.end_nimgs or (nimgs > 0 and (nimgs // args.batch_size) % args.save_every == 0):
+            if nimgs >= args.end_nimgs or (nimgs > 0 and (nimgs // args.batch_size) % args.save_every == 0):
                 save()
 
             if nimgs == args.end_nimgs:

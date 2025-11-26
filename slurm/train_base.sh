@@ -33,4 +33,8 @@ python3 train.py \
     --sample-n=16 \
     --save-every=10000 \
     --demo-every=10000 \
-    --end-nimgs=50000000
+    --end-nimgs=1000000
+
+# Gives better metrics for latent_units = 20, but worse visuals
+# --gradient-clipping
+# Prefer using latent_units = 10 without gradient clipping

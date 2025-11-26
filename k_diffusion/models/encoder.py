@@ -22,15 +22,6 @@ class EncResBlock(nn.Module):
             layers.insert(2, nn.BatchNorm2d(out_channels))
         self.convs = nn.Sequential(*layers)
 
-        # for m in self.convs:
-        #     if isinstance(m, nn.Conv2d):
-        #         k_h, k_w = m.kernel_size
-        #         fan_in = m.in_channels * k_h * k_w
-        #         fan_out = m.out_channels * k_h * k_w
-        #         m.weight.data = weight_init(m.weight.shape, init_mode, fan_in, fan_out)
-        #         if m.bias is not None:
-        #             m.bias.data.zero_()
-
     def forward(self, x):
         return x + self.convs(x)
 
@@ -44,42 +35,51 @@ class ImageEncoder(nn.Module):
         self.encoder = nn.Sequential(
             # 64 -> 32
             nn.Conv2d(num_channels, d, kernel_size=4, stride=2, padding=1),
-            nn.BatchNorm2d(d), nn.ReLU(), # inplace=True),
+            nn.BatchNorm2d(d), nn.ReLU(inplace=True),
             # 32 -> 16
             nn.Conv2d(d, d, kernel_size=4, stride=2, padding=1),
-            nn.BatchNorm2d(d), nn.ReLU(), # inplace=True),
+            nn.BatchNorm2d(d), nn.ReLU(inplace=True),
             # 16 -> 8
             nn.Conv2d(d, d, kernel_size=4, stride=2, padding=1),
-            nn.BatchNorm2d(d), nn.ReLU(), # inplace=True),
+            nn.BatchNorm2d(d), nn.ReLU(inplace=True),
             # 8 -> 4
             nn.Conv2d(d, d, kernel_size=4, stride=2, padding=1),
-            nn.BatchNorm2d(d), nn.ReLU(), # inplace=True),
+            nn.BatchNorm2d(d), nn.ReLU(inplace=True),
 
             EncResBlock(d, d, bn=bn),
-            nn.BatchNorm2d(d), nn.ReLU(), # inplace=True),
+            nn.BatchNorm2d(d), nn.ReLU(inplace=True),
             EncResBlock(d, d, bn=bn),
 
             nn.Flatten(start_dim=1),                # keeps B (e.g., 512)
             nn.Linear(d * 4 * 4, latent_unit),      # no hardcoding
         )
 
-        # for m in self.encoder:
-        #     if isinstance(m, nn.Conv2d):
-        #         k_h, k_w = m.kernel_size
-        #         fan_in = m.in_channels * k_h * k_w
-        #         fan_out = m.out_channels * k_h * k_w
-        #         m.weight.data = weight_init(m.weight.shape, init_mode, fan_in, fan_out)
-        #         if m.bias is not None:
-        #             m.bias.data.zero_()
-
         self.net = nn.ModuleList([
             nn.Sequential(
-                nn.Linear(1, 64), nn.ELU(True),
-                nn.Linear(64, 128), nn.ELU(True),
+                nn.Linear(1, 64), nn.ELU(inplace=True),
+                nn.Linear(64, 128), nn.ELU(inplace=True),
                 nn.Linear(128, context_dim),
                 nn.LayerNorm(context_dim),
             ) for _ in range(latent_unit)
         ])
+
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Conv2d):
+            nn.init.kaiming_normal_(m.weight, mode="fan_in", nonlinearity="relu")
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+        elif isinstance(m, nn.Linear):
+            # Default: orthogonal
+            nn.init.orthogonal_(m.weight)
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+            # Make latent and context outputs slightly smaller scale
+            if m.out_features == self.latent_unit:  # final encoder linear
+                nn.init.orthogonal_(m.weight, gain=0.1)
+            if m.out_features == self.context_dim:  # final per-dim MLP linear
+                nn.init.orthogonal_(m.weight, gain=0.1)
 
     def forward(self, x):
         embed = self.encoding(x)
