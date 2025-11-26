@@ -43,7 +43,7 @@
     },
     "lr_sched": {
         "type": "constant",
-        "warmup": 0.0
+        "warmup": 0.9995
     },
     "ema_sched": {
         "type": "inverse",

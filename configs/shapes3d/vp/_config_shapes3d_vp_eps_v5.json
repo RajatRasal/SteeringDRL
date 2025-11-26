@@ -16,7 +16,7 @@
         "sigma_min": 1e-2,
         "sigma_max": 80,
         "augment_wrapper": false,
-        "learned_subsampling": true,
+        "learned_subsampling": false,
         "up_down_asymmetry": false,
         "use_mid_block": true,
         "sigma_sample_density": {
@@ -29,7 +29,7 @@
         "type": "image",
         "internal_dim": 128,
         "context_dim": 16,
-        "latent_units": 10
+        "latent_units": 20
     },
     "dataset": {
         "type": "shapes3d"
@@ -43,7 +43,7 @@
     },
     "lr_sched": {
         "type": "constant",
-        "warmup": 0.0
+        "warmup": 0.9995
     },
     "ema_sched": {
         "type": "inverse",
