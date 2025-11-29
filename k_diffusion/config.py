@@ -260,7 +260,9 @@ def make_encoder(config):
 
 
 VQVAE_CKPT_PATHS = {
-    "shapes3d": "ckpts/vqvae/2_shapes3d_True_32_128_5e-05/training-state-030000.pkl",
+    'shapes3d': 'ckpts/vqvae/2_shapes3d_True_32_128_5e-05/training-state-030000.pkl',
+    'mpi3d': 'ckpts/vqvae/0_mpi3d_True_32_128_5e-05/training-state-030000.pkl',
+    'cars3d': 'ckpts/vqvae/0_cars3dd_True_32_128_5e-05/training-state-030000.pkl',
 }
 
 def make_vqvae(config):

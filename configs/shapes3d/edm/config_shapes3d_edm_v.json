@@ -29,7 +29,7 @@
         "type": "image",
         "internal_dim": 128,
         "context_dim": 16,
-        "latent_units": 20
+        "latent_units": 10
     },
     "dataset": {
         "type": "shapes3d"
@@ -43,7 +43,7 @@
     },
     "lr_sched": {
         "type": "constant",
-        "warmup": 0.9995
+        "warmup": 0.0
     },
     "ema_sched": {
         "type": "inverse",

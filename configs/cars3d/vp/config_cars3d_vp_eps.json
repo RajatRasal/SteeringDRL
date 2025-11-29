@@ -16,7 +16,7 @@
         "sigma_min": 1e-2,
         "sigma_max": 80,
         "augment_wrapper": false,
-        "learned_subsampling": true,
+        "learned_subsampling": false,
         "up_down_asymmetry": false,
         "use_mid_block": true,
         "sigma_sample_density": {
@@ -32,7 +32,7 @@
         "latent_units": 10
     },
     "dataset": {
-        "type": "shapes3d"
+        "type": "cars3d"
     },
     "optimizer": {
         "type": "adamw",
@@ -43,7 +43,7 @@
     },
     "lr_sched": {
         "type": "constant",
-        "warmup": 0.9995
+        "warmup": 0.0
     },
     "ema_sched": {
         "type": "inverse",

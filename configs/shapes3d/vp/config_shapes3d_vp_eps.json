@@ -7,8 +7,8 @@
         "mapping_out": 16,
         "depths": [2, 2, 2, 2],
         "channels": [64, 128, 256, 256],
-        "self_attn_depths": [true, true, true, false],
-        "cross_attn_depths": [true, true, true, false],
+        "self_attn_depths": [false, true, true, false],
+        "cross_attn_depths": [false, true, true, false],
         "cross_cond_dim": 16,
         "has_variance": false,
         "loss_config": "vp_eps",
@@ -16,7 +16,7 @@
         "sigma_min": 1e-2,
         "sigma_max": 80,
         "augment_wrapper": false,
-        "learned_subsampling": true,
+        "learned_subsampling": false,
         "up_down_asymmetry": false,
         "use_mid_block": true,
         "sigma_sample_density": {
@@ -43,7 +43,7 @@
     },
     "lr_sched": {
         "type": "constant",
-        "warmup": 0.9995
+        "warmup": 0.0
     },
     "ema_sched": {
         "type": "inverse",
