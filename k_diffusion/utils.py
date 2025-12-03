@@ -334,6 +334,28 @@ def rand_log_normal(shape, loc=0., scale=1., device='cpu', dtype=torch.float32):
     return torch.distributions.Normal(loc, scale).icdf(u).exp()
 
 
+def rand_log_normal_monotonic(shape, loc=0., scale=1., side='left', device='cpu', dtype=torch.float32):
+    """
+    Draw samples from a *one-sided* log-normal-like distribution:
+    log σ ~ loc ± , then σ = exp(log σ).
+
+    side='left'  -> log σ = 
+    side='right' -> log σ = 
+    """
+    # stratified uniform
+    u = stratified_with_settings(shape, device=device, dtype=dtype) * (1 - 2e-7) + 1e-7
+    eps = torch.distributions.Normal(loc, scale).icdf(u)
+
+    if side == 'left':
+        log_sigma = torch.where(eps < loc, loc, eps)
+    elif side == 'right':
+        log_sigma = torch.where(eps > loc, loc, eps)
+    else:
+        raise ValueError(f'side {side} is not valid and must be one of "left" or "right"')
+
+    return log_sigma.exp()
+
+
 def rand_log_logistic(shape, loc=0., scale=1., min_value=0., max_value=float('inf'), device='cpu', dtype=torch.float32):
     """Draws samples from an optionally truncated log-logistic distribution."""
     min_value = torch.as_tensor(min_value, device=device, dtype=torch.float64)

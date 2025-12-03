@@ -4,7 +4,7 @@
 
 source /vol/cuda/12.9.0/setup.sh
 
-export PATH="/vol/biomedic3/rrr2417/encdiff/k-diffusion/.venv/bin:/vol/biomedic3/rrr2417/.local/bin:$PATH"
+export PATH="/vol/biomedic2/rrr2417/k-diffusion/.venv/bin:/vol/biomedic3/rrr2417/.local/bin:$PATH"
 
 echo "=== Node: $(hostname) ==="
 echo "--- nvidia-smi ---"
@@ -24,16 +24,17 @@ else:
     print("CUDA not available.")
 PY
 
-python3 train.py \
+python3 train2.py \
     --name=$1 \
     --batch-size=$2 \
     --config=$3 \
     --seed=$4 \
-    --exp-name $5 \
+    --exp-name=$5 \
     --sample-n=16 \
-    --save-every=10000 \
-    --demo-every=10000 \
-    --end-nimgs=1000000
+    --demo-every=5000 \
+    --evaluate-every=5000 \
+    --save-every=100000 \
+    --end-nimgs=30000000
 
 # Gives better metrics for latent_units = 20, but worse visuals
 # --gradient-clipping

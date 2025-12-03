@@ -21,3 +21,4 @@ jupyter
 h5py==3.11.0
 matplotlib==3.9.4
 lpips==0.1.4
+pandas==2.3.3

@@ -1,17 +1,17 @@
 #!/bin/bash
 
-CONFIG_DIR="configs/shapes3d/vp"
+CONFIG_DIR="configs_logsnr/shapes3d"
 SEEDS=4
 BATCH_SIZE=128
-EXP_NAME=vp_arch_ema_stability_clipping
+EXP_NAME=vdmpp/shapes3d_low_discrep
 
-counter=0
-for config in "$CONFIG_DIR"/config_*; do
+for config in "$CONFIG_DIR"/*; do
+    base=$(basename "$config")
+    filename="${base%.*}"
     for seed in $(seq 0 $SEEDS); do
-        echo $config $seed $counter
-        sbatch -J "vp-v$counter-seed$seed" \
-            -p gpus24,gpus48 \
-            ./slurm/train_base.sh "vp-v$counter-seed$seed" $BATCH_SIZE $config $seed $EXP_NAME
+        echo "$seed$filename"
+        sbatch -J "$seed-$filename" \
+            -p gpus48 \
+            ./slurm/train_base.sh "$seed$filename" $BATCH_SIZE $config $seed $EXP_NAME
     done
-    ((counter++))
 done

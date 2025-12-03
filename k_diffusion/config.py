@@ -5,8 +5,10 @@ import pickle
 from pathlib import Path
 
 from jsonmerge import merge
+import torch
+from torch.distributions import Normal
 
-from . import augmentation, layers, models, utils, external
+from . import augmentation, layers, models, utils, external, external2
 from data.ground_truth import named_data
 
 
@@ -119,7 +121,7 @@ def load_config(path_or_dict):
             config = json.loads(file.read_text())
     else:
         config = path_or_dict
-    if config['model']['type'] in ['image_v1', 'image_v2']:
+    if config['model']['type'] in ['image_v1', 'image_v2', 'image_v3']:
         config = merge(defaults_image_v1, config)
     elif config['model']['type'] == 'image_transformer_v1':
         config = merge(defaults_image_transformer_v1, config)
@@ -172,6 +174,27 @@ def make_model(config):
             model = augmentation.KarrasAugmentWrapper(model)
     elif config['type'] == 'image_v2':
         model = models.ImageDenoiserModelV2(
+            config['input_channels'],
+            config['mapping_out'],
+            config['depths'],
+            config['channels'],
+            config['self_attn_depths'],
+            config['cross_attn_depths'],
+            patch_size=config['patch_size'],
+            dropout_rate=config['dropout_rate'],
+            mapping_cond_dim=config['mapping_cond_dim'] + (9 if config['augment_wrapper'] else 0),
+            unet_cond_dim=config['unet_cond_dim'],
+            cross_cond_dim=config['cross_cond_dim'],
+            skip_stages=config['skip_stages'],
+            has_variance=config['has_variance'],
+            learned_subsampling=config['learned_subsampling'],
+            up_down_asymmetry=config['up_down_asymmetry'],
+            use_mid_block=config['use_mid_block'],
+        )
+        if config['augment_wrapper']:
+            model = augmentation.KarrasAugmentWrapper(model)
+    elif config['type'] == 'image_v3':
+        model = models.ImageDenoiserModelV3(
             config['input_channels'],
             config['mapping_out'],
             config['depths'],
@@ -262,7 +285,7 @@ def make_encoder(config):
 VQVAE_CKPT_PATHS = {
     'shapes3d': 'ckpts/vqvae/2_shapes3d_True_32_128_5e-05/training-state-030000.pkl',
     'mpi3d': 'ckpts/vqvae/0_mpi3d_True_32_128_5e-05/training-state-030000.pkl',
-    'cars3d': 'ckpts/vqvae/0_cars3dd_True_32_128_5e-05/training-state-030000.pkl',
+    'cars3d': 'ckpts/vqvae/0_cars3d_True_32_128_5e-05/training-state-030000.pkl',
 }
 
 def make_vqvae(config):
@@ -292,10 +315,6 @@ def make_denoiser_wrapper(config):
             return partial(layers.SimpleLossDenoiser, sigma_data=sigma_data, weighting=weighting, scales=scales)
         elif loss_config == 'karras_f':
             return partial(layers.Denoiser, sigma_data=sigma_data, weighting=weighting, scales=scales)
-    if loss_config == 'simple':
-        if has_variance:
-            raise ValueError('Simple loss config does not support a variance output')
-        return partial(layers.SimpleLossDenoiser, sigma_data=sigma_data)
     if loss_config.startswith('vp_'):
         if has_variance:
             raise ValueError('VP config does not support a variance output')
@@ -305,6 +324,15 @@ def make_denoiser_wrapper(config):
             return external.ContinuousVDDPMDenoiser
         elif loss_config == 'vp_x':
             return external.ContinuousXDDPMDenoiser
+    if loss_config.startswith('vdmpp_'):
+        if has_variance:
+            raise ValueError('VP config does not support a variance output')
+        if loss_config == 'vdmpp_eps':
+            return external2.EpsPredictionDenoiser
+        elif loss_config == 'vdmpp_x':
+            return external2.XPredictionDenoiser
+        elif loss_config == 'vdmpp_v':
+            return external2.VPredictionDenoiser
     raise ValueError('Unknown loss config type')
 
 
@@ -340,6 +368,112 @@ def make_sample_density(config):
         image_d = sd_config.get('image_d', max(config['input_size']))
         noise_d_low = sd_config.get('noise_d_low', 32)
         noise_d_high = sd_config.get('noise_d_high', max(config['input_size']))
-        return partial(utils.rand_cosine_interpolated, image_d=image_d, noise_d_low=noise_d_low, noise_d_high=noise_d_high, sigma_data=sigma_data, min_value=min_value, max_value=max_value)
+        return partial(
+            utils.rand_cosine_interpolated,
+            image_d=image_d,
+            noise_d_low=noise_d_low,
+            noise_d_high=noise_d_high,
+            sigma_data=sigma_data,
+            min_value=min_value,
+            max_value=max_value,
+        )
 
     raise ValueError('Unknown sample density type')
+
+
+def make_lambda_noise_schedule(config):
+    ns_config = config['lambda_noise_schedule']
+    shift = ns_config.get('shift', 0)
+    lambda_min = config.get('lambda_min', -15)
+    lambda_max = config.get('lambda_max', 15)
+    if ns_config['type'] == 'cosine':
+        ns = external2.CosineSchedule(shift, lambda_min, lambda_max)
+    elif ns_config['type'] == 'edm':
+        ns = external2.EDMTrainingSchedule(shift, lambda_min, lambda_max)
+    else:
+        raise ValueError('Unknown lambda noise schedule')
+    return ns
+
+
+def make_weighting_function(config):
+    w_config = config['weighting']
+    w_type = w_config['type']
+    shift = float(w_config.get('shift', 0.0))
+
+    # Optional lambda range for grid-based peak finding
+    lam_min = w_config.get('lam_min', -15.0)
+    lam_max = w_config.get('lam_max', 15.0)
+
+    sigma_data = float(w_config.get('sigma_data', 0.5))
+    edm_mu = float(w_config.get('edm_mu', 2.4))
+    edm_sigma = float(w_config.get('edm_sigma', 2.4))
+
+    def w_edm_fn(lam: torch.Tensor) -> torch.Tensor:
+        """
+        EDM-style weighting in λ-space:
+          w(λ) = N(λ; μ, σ^2) * (exp(-λ) + σ_data^2)
+        """
+        lam = lam.to(torch.float32)
+        mu = torch.tensor(edm_mu, device=lam.device, dtype=lam.dtype)
+        sigma = torch.tensor(edm_sigma, device=lam.device, dtype=lam.dtype)
+        dist = Normal(mu, sigma)
+        p_lam = dist.log_prob(lam).exp()
+        return p_lam * (torch.exp(-lam) + sigma_data ** 2)
+
+    # ----------------- pick base weighting -----------------
+
+    if w_type == 'elbo':
+        def w_fn(lam):
+            return torch.ones_like(lam)
+
+    elif w_type == 'exp':
+        def w_fn(lam):
+            lam_shifted = lam + shift
+            return torch.exp(-lam_shifted / 2.0)
+
+    elif w_type == 'sech':
+        def w_fn(lam):
+            lam_shifted = lam + shift
+            return 1.0 / torch.cosh(lam_shifted / 2.0)
+
+    elif w_type == 'edm':
+        def w_fn(lam):
+            lam_shifted = lam + shift
+            return w_edm_fn(lam_shifted)
+
+    elif w_type == 'edm-monotonic':
+        # Precompute peak of shifted EDM weighting on a grid
+        grid = torch.linspace(lam_min, lam_max, 50000)
+        with torch.no_grad():
+            vals = w_edm_fn(grid + shift)
+            idx = torch.argmax(vals)
+            lam_peak = grid[idx]                  # λ* in *unshifted* lam-space
+            w_peak = vals[idx]                    # w(λ*)
+
+        def w_fn(lam):
+            lam_shifted = lam + shift
+            w = w_edm_fn(lam_shifted)
+            # Clamp to w_peak for lam_shifted < lam_peak
+            return torch.where(
+                lam_shifted < lam_peak.to(lam.device, lam.dtype),
+                w_peak.to(lam.device, lam.dtype),
+                w,
+            )
+
+    elif w_type == 'sigmoid':
+        # w(λ) = sigmoid(−λ + shift)
+        def w_fn(lam):
+            lam_shifted = -lam + shift  # optional; you could also treat 'shift' as the k directly
+            return torch.sigmoid(lam_shifted)
+
+    elif w_type == 'laplace':
+        raise NotImplementedError
+
+    elif w_type == 'laplace-monotonic':
+        raise NotImplementedError
+
+    else:
+        raise ValueError(f'Unknown weighting function type: {w_type}')
+
+    return w_fn
+
