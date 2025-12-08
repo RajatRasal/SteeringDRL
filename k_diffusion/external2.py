@@ -1,9 +1,10 @@
 from abc import ABC, abstractmethod
-from typing import Callable
+from typing import Callable, Optional
 import torch
 from torch import nn
 from torch.distributions import Normal
 from k_diffusion import utils
+import matplotlib.pyplot as plt
 
 
 PI = torch.pi
@@ -262,6 +263,180 @@ class EDMSamplingSchedule(NoiseSchedule):
         return e_term / denom
 
 
+class ImportanceWeightMonitor:
+    """
+    Tracks the empirical effective weighting over λ via accumulated
+    importance weights per λ-bin, and compares/plots against a target
+    weighting function w(λ).
+
+    - You should pass:
+        lambda_min, lambda_max: range of λ (logSNR) you care about
+        num_bins: number of λ-bins
+        weight_fn: callable w(λ): Tensor[B] -> Tensor[B]
+        similarity_fn: callable (emp, target) -> float, e.g. MAE or R²
+
+    - During training, call:
+        monitor(logsnr, importance)
+
+      where:
+        logsnr: λ values (B,)
+        importance: w(λ)/p(λ) per sample (B,)
+    """
+
+    def __init__(
+        self,
+        lambda_min: float,
+        lambda_max: float,
+        num_bins: int,
+        weight_fn: Callable[[torch.Tensor], torch.Tensor],
+        similarity_fn: Callable[[torch.Tensor, torch.Tensor], float],
+        device: str = "cpu",
+    ):
+        self.lambda_min = lambda_min
+        self.lambda_max = lambda_max
+        self.num_bins = num_bins
+        self.device = torch.device(device)
+
+        self.weight_fn = weight_fn          # theoretical w(λ)
+        self.similarity_fn = similarity_fn  # e.g. MAE / TV / R²
+
+        # ∑ importance per bin (≈ ∫_bin w(λ) dλ)
+        self.weight_sum = torch.zeros(num_bins, device=self.device)
+
+    # ---------- accumulation ----------
+
+    def _bin_indices(self, logsnr: torch.Tensor) -> torch.Tensor:
+        """
+        Map λ=logsnr to integer bin indices in [0, num_bins-1].
+        """
+        lam = logsnr.clamp(self.lambda_min, self.lambda_max)
+        rel = (lam - self.lambda_min) / (self.lambda_max - self.lambda_min)  # [0,1]
+        bins = (rel * self.num_bins).long()
+        return bins.clamp(0, self.num_bins - 1)
+
+    def reset(self):
+        self.weight_sum.zero_()
+
+    @torch.no_grad()
+    def __call__(
+        self,
+        logsnr: torch.Tensor,     # shape (B,)
+        importance: torch.Tensor  # shape (B,), w(λ)/p(λ)
+    ):
+        """
+        Accumulate ∑ importance per λ-bin (≈ ∫ w(λ) dλ in each bin).
+        """
+        logsnr = logsnr.detach().to(self.device).view(-1)
+        importance = importance.detach().to(self.device).view(-1)
+
+        bins = self._bin_indices(logsnr)
+        self.weight_sum.index_add_(0, bins, importance)
+
+    # ---------- densities / curves ----------
+
+    def bin_centers(self, device: Optional[torch.device] = None) -> torch.Tensor:
+        """
+        Returns λ bin centers as a 1D tensor of shape [num_bins].
+        """
+        if device is None:
+            device = self.device
+        edges = torch.linspace(self.lambda_min, self.lambda_max, self.num_bins + 1, device=device)
+        centers = 0.5 * (edges[:-1] + edges[1:])
+        return centers
+
+    def empirical_density(self) -> torch.Tensor:
+        """
+        Sum-normalised empirical density over λ-bins based on accumulated
+        importance. In expectation this approximates discretised w(λ).
+        """
+        eps = 1e-8
+        dens = self.weight_sum / (self.weight_sum.sum() + eps)
+        return dens
+
+    def target_density(self) -> torch.Tensor:
+        """
+        Sum-normalised theoretical density over λ-bins by evaluating w(λ)
+        on the bin centers.
+        """
+        lam = self.bin_centers(device=self.device)
+        target = self.weight_fn(lam)
+        target = target.clone()
+        eps = 1e-8
+        target = target / (target.sum() + eps)
+        return target
+
+    def similarity(self) -> float:
+        """
+        Compute similarity(empirical_density, target_density) on
+        sum-normalised densities (good for MAE / TV / R²).
+        """
+        emp = self.empirical_density()
+        target = self.target_density()
+        return self.similarity_fn(emp, target)
+
+    def curve(self, normalise_max: bool = True):
+        """
+        Returns (bin_centers, emp_curve, target_curve).
+
+        - If normalise_max=True:
+            both curves are individually normalised by their max (shape only).
+        - If normalise_max=False:
+            both curves are sum-normalised densities.
+        """
+        lam = self.bin_centers(device=self.device)
+
+        emp = self.empirical_density()      # sum-normalised
+        target = self.target_density()      # sum-normalised
+
+        eps = 1e-8
+        if normalise_max:
+            emp = emp / (emp.max() + eps)
+            target = target / (target.max() + eps)
+
+        return lam, emp, target
+
+    def plot(
+        self,
+        normalise_max: bool = True,
+        label_emp: str = "empirical w_eff(λ)",
+        label_target: str = "target w(λ)",
+        filename: str = "importance_weight_monitor.pdf",
+        title: str = "Importance Weight Monitor",
+    ):
+        """
+        Plot empirical effective w(λ) and theoretical w(λ) on the same λ-grid.
+
+        - normalise_max=True → both curves normalised by their own max (paper-style).
+        - normalise_max=False → both curves are sum-normalised densities.
+
+        If filename is provided, saves to that path, otherwise just returns the fig/ax.
+        """
+        lam, emp, target = self.curve(normalise_max=normalise_max)
+        lam_cpu = lam.detach().cpu()
+        emp_cpu = emp.detach().cpu()
+        target_cpu = target.detach().cpu()
+
+        fig, ax = plt.subplots(figsize=(6, 4))
+
+        ax.plot(lam_cpu, emp_cpu, label=label_emp, linewidth=2)
+        ax.plot(
+            lam_cpu,
+            target_cpu,
+            label=label_target,
+            linestyle="--",
+            linewidth=1.5,
+        )
+
+        ax.set_xlabel("λ (log SNR)")
+        ax.set_ylabel("w(λ) (normalised)")
+        ax.set_title(title)
+        ax.legend()
+        ax.grid(True, alpha=0.2)
+
+        fig.savefig(filename, bbox_inches="tight")
+        plt.close(fig)
+
+
 class BaseLogSNRDenoiser(ABC, nn.Module):
     """
     Generic log-SNR denoiser wrapper.
@@ -324,11 +499,15 @@ class BaseLogSNRDenoiser(ABC, nn.Module):
 
     # ---------- training loss: weighted ELBO in λ ----------
 
-    def loss(self,
-             x0: torch.Tensor,
-             weight_fn: Callable,
-             noise_schedule: NoiseSchedule,
-             **kwargs) -> torch.Tensor:
+    def loss(
+        self,
+        x0: torch.Tensor,
+        weight_fn: Callable,
+        noise_schedule: NoiseSchedule,
+        generator: torch.Generator,
+        importance_monitor: Optional[ImportanceWeightMonitor] = None,
+        **kwargs,
+    ) -> torch.Tensor:
         """
         x0       : clean data (B,C,H,W)
         logsnr        : t ~ U[0,1], f(t) = logsnr (B,)
@@ -340,7 +519,7 @@ class BaseLogSNRDenoiser(ABC, nn.Module):
         """
         device = x0.device
         B = x0.shape[0]
-        u = torch.rand(B).to(device)
+        u = torch.rand(B, generator=generator).to(device=device)
 
         # Low-discrepency sampler (VDM paper Appendix I.1)
         t = (u + torch.arange(B, device=device) / B) % 1
@@ -351,26 +530,27 @@ class BaseLogSNRDenoiser(ABC, nn.Module):
         sigma_t = utils.append_dims(torch.sqrt(torch.sigmoid(-logsnr)), 4)
 
         # forward noising x0 -> x_t
-        eps = torch.randn_like(x0)
+        eps = torch.randn(x0.size(), generator=generator).to(device=device)
         x_t = alpha_t * x0 + sigma_t * eps
 
         # model prediction
         model_out = self(x_t, logsnr, **kwargs)
         eps_pred = self.to_eps(model_out, x_t, sigma_t, alpha_t)
 
-        # per-sample ε-MSE
-        # mse_eps = (eps_pred - eps).view(B, -1).mean(dim=1)  # (B,)
-
         # importance weight: w(λ) / p(λ)
         w_lambda = weight_fn(logsnr)                        # (B,)
         p_lambda = noise_schedule.density(logsnr)            # (B,)
         importance = w_lambda / (p_lambda + 1e-12)
 
-        # optional variance normalisation:
-        # importance = importance / importance.mean().detach()
-
         importance = utils.append_dims(importance, 4)
         loss = 0.5 * (importance * (eps_pred - eps) ** 2).mean()
+
+        if importance_monitor is not None:
+            importance_monitor(
+                logsnr=logsnr,
+                importance=importance,
+            ) 
+
         return loss
 
 

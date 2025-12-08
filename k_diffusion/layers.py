@@ -231,6 +231,9 @@ class CrossAttention2d(ConditionedModule):
         self.dropout = nn.Dropout(dropout_rate)
         nn.init.zeros_(self.out_proj.weight)
         nn.init.zeros_(self.out_proj.bias)
+        self.q = None
+        self.k = None
+        self.v = None
 
     def forward(self, input, cond):
         n, c, h, w = input.shape
@@ -240,9 +243,121 @@ class CrossAttention2d(ConditionedModule):
         kv = kv.view([n, -1, self.n_head * 2, c // self.n_head]).transpose(1, 2)
         k, v = kv.chunk(2, dim=1)
         attn_mask = (cond[self.cond_key_padding][:, None, None, :]) * -1e4
+        self.k = k
+        self.q = q
+        self.v = v
         y = F.scaled_dot_product_attention(q, k, v, attn_mask, dropout_p=self.dropout.p)
         y = y.transpose(2, 3).contiguous().view([n, c, h, w])
         return input + self.out_proj(y)
+
+
+class CrossAttention2dReZero(ConditionedModule):
+    def __init__(
+        self,
+        c_dec: int,
+        c_enc: int,
+        n_head: int,
+        norm_dec,
+        dropout_rate: float = 0.0,
+        cond_key: str = "cross",
+        cond_key_padding: str = "cross_padding",
+        attn_init_std: float = 0.02,
+        init_res_scale: float = 0.1,   # ReZero-style: start at 0, or 0.1 if you want non-zero
+    ):
+        super().__init__()
+        assert c_dec % n_head == 0, "c_dec must be divisible by n_head"
+
+        self.cond_key = cond_key
+        self.cond_key_padding = cond_key_padding
+
+        self.norm_enc = nn.LayerNorm(c_enc)
+        self.norm_dec = norm_dec(c_dec)
+        self.n_head = n_head
+
+        self.q_proj = nn.Conv2d(c_dec, c_dec, kernel_size=1)
+        self.kv_proj = nn.Linear(c_enc, 2 * c_dec)
+        self.out_proj = nn.Conv2d(c_dec, c_dec, kernel_size=1)
+
+        self.dropout = nn.Dropout(dropout_rate)
+
+        # ReZero-style residual gate on the CA branch
+        self.res_scale = nn.Parameter(torch.tensor(init_res_scale))
+
+        # For analysis (q/k/v captured each forward)
+        self.q = None
+        self.k = None
+        self.v = None
+
+        # Initialise weights
+        self._reset_parameters(attn_init_std)
+
+    def _reset_parameters(self, attn_init_std: float):
+        # q / k / v projections: small gaussian
+        nn.init.normal_(self.q_proj.weight, mean=0.0, std=attn_init_std)
+        if self.q_proj.bias is not None:
+            nn.init.zeros_(self.q_proj.bias)
+
+        nn.init.normal_(self.kv_proj.weight, mean=0.0, std=attn_init_std)
+        if self.kv_proj.bias is not None:
+            nn.init.zeros_(self.kv_proj.bias)
+
+        # out_proj starts at zero so CA path is initially off (together with res_scale)
+        nn.init.zeros_(self.out_proj.weight)
+        if self.out_proj.bias is not None:
+            nn.init.zeros_(self.out_proj.bias)
+
+    def forward(self, x: torch.Tensor, cond: dict) -> torch.Tensor:
+        """
+        x:    [B, C_dec, H, W]
+        cond: dict with
+              cond[self.cond_key]           -> [B, L, C_enc]
+              cond[self.cond_key_padding]   -> [B, L] (True = pad)
+        """
+        B, C, H, W = x.shape
+
+        # ---- queries from decoder feature map ----
+        # norm_dec is your FiLM/cond-aware norm: norm_dec(x, cond)
+        q_in = self.norm_dec(x, cond)            # [B, C_dec, H, W]
+        q = self.q_proj(q_in)                    # [B, C_dec, H, W]
+        q = q.view(B, self.n_head, C // self.n_head, H * W)  # [B, H, d, Q]
+        q = q.transpose(2, 3)                    # [B, H, Q, d]
+
+        # ---- keys / values from encoder tokens ----
+        enc = cond[self.cond_key]                # [B, L, C_enc]
+        enc = self.norm_enc(enc)                 # [B, L, C_enc]
+
+        kv = self.kv_proj(enc)                   # [B, L, 2 * C_dec]
+        kv = kv.view(B, -1, 2 * self.n_head, C // self.n_head)  # [B, L, 2H, d]
+        kv = kv.transpose(1, 2)                  # [B, 2H, L, d]
+        k, v = kv.chunk(2, dim=1)                # each [B, H, L, d]
+
+        # ---- attention mask ----
+        # cond_key_padding: [B, L] with True on padded positions
+        pad = cond[self.cond_key_padding].to(q.device)  # [B, L]
+        # scaled_dot_product_attention expects additive mask or bool:
+        # we build an additive mask broadcasted to [B,H,Q,L]
+        attn_mask = pad[:, None, None, :].float() * -1e4  # [B,1,1,L]
+
+        # Save for analysis
+        self.q = q
+        self.k = k
+        self.v = v
+
+        # ---- scaled dot-product attention ----
+        # q: [B, H, Q, d], k/v: [B, H, L, d]
+        y = F.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            attn_mask=attn_mask,
+            dropout_p=self.dropout.p if self.training else 0.0,
+        )                                        # [B, H, Q, d]
+
+        y = y.transpose(2, 3).contiguous().view(B, C, H, W)  # [B, C_dec, H, W]
+        y = self.out_proj(y)                                  # [B, C_dec, H, W]
+
+        # ReZero-style residual: learn how much CA to use
+        return x + self.res_scale * y
 
 
 # Downsampling/upsampling

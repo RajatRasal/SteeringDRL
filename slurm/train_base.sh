@@ -31,10 +31,12 @@ python3 train2.py \
     --seed=$4 \
     --exp-name=$5 \
     --sample-n=16 \
-    --demo-every=5000 \
-    --evaluate-every=5000 \
-    --save-every=100000 \
-    --end-nimgs=30000000
+    --demo-every=1000 \
+    --evaluate-every=1000 \
+    --debug-log-every=100 \
+    --save-every=1000000 \
+    --end-nimgs=3000000 \
+    --training-seed=$6
 
 # Gives better metrics for latent_units = 20, but worse visuals
 # --gradient-clipping

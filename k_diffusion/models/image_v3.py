@@ -26,6 +26,8 @@ class ImageDenoiserModelV3(nn.Module):
         learned_subsampling=False,
         up_down_asymmetry=False,
         use_mid_block=True,
+        rezero=False,
+        init_res_scale=1.0,
     ):
         super().__init__()
         self.c_in = c_in
@@ -68,6 +70,8 @@ class ImageDenoiserModelV3(nn.Module):
                     c_enc=cross_cond_dim,
                     dropout_rate=dropout_rate,
                     attn_heads=n_heads,
+                    rezero=rezero,
+                    init_res_scale=init_res_scale,
                 )
             )
         mid_block = None
@@ -80,6 +84,8 @@ class ImageDenoiserModelV3(nn.Module):
                 c_enc=cross_cond_dim,
                 dropout_rate=dropout_rate,
                 attn_heads=n_heads,
+                rezero=rezero,
+                init_res_scale=init_res_scale,
             )
         for i in range(len(depths)):
             my_c_in = channels[i] * 2 if i < len(depths) - 1 else channels[i]
@@ -98,6 +104,8 @@ class ImageDenoiserModelV3(nn.Module):
                     c_enc=cross_cond_dim,
                     dropout_rate=dropout_rate,
                     attn_heads=n_heads,
+                    rezero=rezero,
+                    init_res_scale=init_res_scale,
                 )
             )
         self.u_net = layers.UNet(

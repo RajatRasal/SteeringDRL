@@ -7,7 +7,8 @@ from collections import defaultdict
 # ----------------------------------------------------
 # CONFIG
 # ----------------------------------------------------
-ROOT = "ckpts/vdmpp/shapes3d_low_discrep"
+# ROOT = "ckpts/vdmpp/shapes3d_low_discrep
+ROOT = "ckpts/vdmpp/shapes3d_early_stage_sech_dynamic_rezero"
 METRICS = ["dci", "factorvae", "mig", "mse", "lpips"]
 SAVE_FIGS = True
 OUTDIR = "analysis_plots"

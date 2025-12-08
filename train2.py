@@ -10,6 +10,8 @@ from pathlib import Path
 import time
 import shutil
 import numpy as np
+from collections import defaultdict
+from typing import Dict, Any, Optional, List
 
 import safetensors.torch as safetorch
 import torch
@@ -21,9 +23,142 @@ from tqdm.auto import tqdm
 from torch.utils.data import DataLoader, StackDataset, TensorDataset
 import matplotlib.pyplot as plt
 import lpips
+from torch import nn
 
 import k_diffusion as K
 from data.ground_truth import named_data
+
+
+class GradNormLogger:
+    """
+    Tracks gradient norms with:
+      - EMA (persistent across training)
+      - Window stats (reset after each flush)
+    
+    And produces a ready-to-log dictionary via make_log_dict().
+    """
+
+    def __init__(self, ema_alpha: float = 0.9):
+        assert 0.0 < ema_alpha < 1.0
+        self.ema_alpha = ema_alpha
+
+        # Persistent EMA values
+        self._ema: Dict[str, float] = {}
+
+        # Window of recent raw values (cleared after flush)
+        self._window: Dict[str, List[float]] = defaultdict(list)
+
+    @staticmethod
+    def grad_norm(obj) -> float:
+        """
+        Compute L2 gradient norm.
+
+        Supports:
+          - nn.Module
+          - Iterable of parameters (e.g. list[Parameter])
+
+        Returns:
+          float: sqrt(sum(g^2)).
+        """
+        total = 0.0
+
+        # Case 1: nn.Module → use .parameters()
+        if isinstance(obj, nn.Module):
+            params = obj.parameters()
+
+        # Case 2: list/tuple/set of parameters
+        elif isinstance(obj, (list, tuple, set)):
+            params = obj
+
+        else:
+            raise TypeError(
+                f"grad_norm expected nn.Module or list of parameters, got {type(obj)}"
+            )
+
+        # accumulate squared grad norms
+        for p in params:
+            if p.grad is None:
+                continue
+            g = p.grad.detach()
+            total += g.pow(2).sum().item()
+
+        return math.sqrt(total + 1e-12)
+
+    def update(self, values: Dict[str, float]):
+        """
+        Update EMA and window buffers with new gradient norms.
+
+        Args:
+            values: dict[name] = float
+        """
+        alpha = self.ema_alpha
+        for name, v in values.items():
+            v = float(v)
+
+            # EMA update
+            if name not in self._ema:
+                self._ema[name] = v
+            else:
+                self._ema[name] = alpha * self._ema[name] + (1 - alpha) * v
+
+            # add to window buffer
+            self._window[name].append(v)
+
+    def _compute_window_stats(self) -> Dict[str, Dict[str, float]]:
+        """Compute stats for current window (mean/std/min/max/count)."""
+        stats = {}
+        for name, vals in self._window.items():
+            if not vals:
+                continue
+            n = len(vals)
+            mean = sum(vals) / n
+            var = sum((x - mean) ** 2 for x in vals) / max(1, n - 1)
+            std = math.sqrt(var)
+            stats[name] = {
+                "mean": mean,
+                "std": std,
+                "min": min(vals),
+                "max": max(vals),
+                "count": n,
+            }
+        return stats
+
+    def make_log_dict(self, prefix: str = "grads/", step: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Produce a dictionary suitable for wandb/TensorBoard logging.
+
+        Returns a dict of:
+            prefix + name + "_ema"
+            prefix + name + "_window_mean"
+            prefix + name + "_window_std"
+            prefix + name + "_window_min"
+            prefix + name + "_window_max"
+            prefix + name + "_window_count"
+
+        Then clears window state.
+        """
+        log_dict = {}
+
+        # --- window stats ---
+        window_stats = self._compute_window_stats()
+        for name, stats in window_stats.items():
+            log_dict[f"{prefix}{name}_window_mean"] = stats["mean"]
+            log_dict[f"{prefix}{name}_window_std"] = stats["std"]
+            log_dict[f"{prefix}{name}_window_min"] = stats["min"]
+            log_dict[f"{prefix}{name}_window_max"] = stats["max"]
+            log_dict[f"{prefix}{name}_window_count"] = stats["count"]
+
+        # --- ema values ---
+        for name, ema in self._ema.items():
+            log_dict[f"{prefix}{name}_ema"] = ema
+
+        if step is not None:
+            log_dict["step"] = step
+
+        # clear window after flush
+        self._window.clear()
+
+        return log_dict
 
 
 def main():
@@ -43,6 +178,8 @@ def main():
                    help='the nimgs to end training at')
     p.add_argument('--evaluate-every', type=int, default=10000,
                    help='evaluate every this many steps')
+    p.add_argument('--debug-log-every', type=int, default=10000,
+                   help='debug logging stats every this many steps')
     p.add_argument('--evaluate-only', action='store_true',
                    help='evaluate instead of training')
     p.add_argument('--grad-accum-steps', type=int, default=1,
@@ -70,6 +207,8 @@ def main():
     p.add_argument('--save-every', type=int, default=10000,
                    help='save every this many steps')
     p.add_argument('--seed', type=int,
+                   help='the random seed')
+    p.add_argument('--training-seed', type=int,
                    help='the random seed')
     p.add_argument('--start-method', type=str, default='spawn',
                    choices=['fork', 'forkserver', 'spawn'],
@@ -283,7 +422,32 @@ def main():
         extractor = lpips.LPIPS(net='vgg').to(device).to(torch.float32)
         metrics_log = K.utils.CSVLogger(
             str(run_dir / 'metrics.csv'),
-            ['nimgs', 'time', 'loss', 'mse', 'lpips', 'dci', 'factorvae', 'mig', 'betavae'],
+            ['nimgs', 'time', 'loss', 'mse', 'lpips', 'dci', 'factorvae', 'mig', 'betavae', 'importance_sim'],
+        )
+
+    debug_log_enabled = args.debug_log_every > 0
+    debug_log = None
+    if debug_log_enabled:
+        debug_log = K.utils.CSVLogger(
+            str(run_dir / 'debug.csv'),
+            [
+                'nimgs',
+                'window_enc_mean',
+                'window_enc_std',
+                'window_enc_min',
+                'window_enc_max',
+                'window_dec_mean',
+                'window_dec_std',
+                'window_dec_min',
+                'window_dec_max',
+                'window_ca_mean',
+                'window_ca_std',
+                'window_ca_min',
+                'window_ca_max',
+                'ema_enc_mean',
+                'ema_dec_mean',
+                'ema_ca_mean',
+            ],
         )
 
     @torch.no_grad()
@@ -465,6 +629,13 @@ def main():
             mig = 0
             betavae = 0
 
+        importance_sim = importance_monitor.similarity()
+        importance_monitor.plot(
+            normalise_max=True,
+            filename=str(images_dir / f'{args.name}_importance_sim_{nimgs:08}.png')
+        )
+        importance_monitor.reset()
+
         metrics_log.write(
             nimgs,
             elapsed,
@@ -475,6 +646,7 @@ def main():
             factorvae,
             mig,
             betavae,
+            importance_sim,
         )
         if use_wandb:
             wandb.log(
@@ -485,6 +657,7 @@ def main():
                     'FactorVAE': factorvae,
                     'MIG': mig,
                     'BetaVAE': betavae,
+                    'ImportanceSimilarity': importance_sim,
                 },
                 step=nimgs,
             )
@@ -521,6 +694,35 @@ def main():
         return
 
     losses_since_last_print = []
+    training_generator = torch.Generator().manual_seed(args.training_seed)
+
+    def mae_similarity(emp: torch.Tensor, target: torch.Tensor) -> float:
+        """
+        Mean Absolute Error between two 1D tensors.
+        Assumes both are sum-normalised densities.
+        """
+        return float((emp - target).abs().mean().item())
+
+    importance_monitor = K.external2.ImportanceWeightMonitor(
+        lambda_min=model_config['lambda_min'],
+        lambda_max=model_config['lambda_max'],
+        num_bins=20000,
+        weight_fn=weighting_fn,
+        similarity_fn=mae_similarity,
+        device=device,
+    )
+
+    def get_all_cross_attn_params(model) -> List:
+        params = []
+        for module in model.modules():
+            if isinstance(module, K.layers.CrossAttention2d) or isinstance(module, K.layers.CrossAttention2dReZero):
+                for p in module.parameters():
+                    if p.requires_grad:
+                        params.append(p)
+        return params
+
+    grad_logger = GradNormLogger()
+    ca_module_params = get_all_cross_attn_params(model)
 
     try:
         while True:
@@ -554,10 +756,24 @@ def main():
                 with torch.no_grad():
                     reals = vqvae.encode(reals)
 
-                losses = model.loss(reals, weighting_fn, noise_schedule, **extra_args)
+                losses = model.loss(
+                    reals,
+                    weighting_fn,
+                    noise_schedule,
+                    training_generator,
+                    importance_monitor,
+                    **extra_args,
+                )
 
             loss = losses.mean()
             loss.backward()
+
+            grad_values = {
+                'encoder': GradNormLogger.grad_norm(encoder),
+                'decoder': GradNormLogger.grad_norm(model),
+                'ca': GradNormLogger.grad_norm(ca_module_params),
+            }
+            grad_logger.update(grad_values)
 
             if args.gradient_clipping:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -601,6 +817,27 @@ def main():
 
             if (nimgs // args.batch_size) % args.demo_every == 0:
                 demo()
+
+            if debug_log_enabled and nimgs > 0 and (nimgs // args.batch_size) % args.debug_log_every == 0:
+                log_dict = grad_logger.make_log_dict(step=nimgs)
+                debug_log.write(
+                    log_dict['step'],
+                    log_dict['grads/encoder_window_mean'],
+                    log_dict['grads/encoder_window_std'],
+                    log_dict['grads/encoder_window_min'],
+                    log_dict['grads/encoder_window_max'],
+                    log_dict['grads/decoder_window_mean'],
+                    log_dict['grads/decoder_window_std'],
+                    log_dict['grads/decoder_window_min'],
+                    log_dict['grads/decoder_window_max'],
+                    log_dict['grads/ca_window_mean'],
+                    log_dict['grads/ca_window_std'],
+                    log_dict['grads/ca_window_min'],
+                    log_dict['grads/ca_window_max'],
+                    log_dict['grads/encoder_ema'],
+                    log_dict['grads/decoder_ema'],
+                    log_dict['grads/ca_ema'],
+                )
 
             if evaluate_enabled and nimgs > 0 and (nimgs // args.batch_size) % args.evaluate_every == 0:
                 evaluate()

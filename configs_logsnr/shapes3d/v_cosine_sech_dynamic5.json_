@@ -1,0 +1,59 @@
+{
+    "model": {
+        "type": "image_v3",
+        "input_channels": 3,
+        "input_size": [16, 16],
+        "patch_size": 1,
+        "mapping_out": 16,
+        "depths": [2, 2, 2, 2],
+        "channels": [64, 128, 256, 256],
+        "self_attn_depths": [false, true, true, false],
+        "cross_attn_depths": [false, true, true, false],
+        "cross_cond_dim": 16,
+        "has_variance": false,
+        "loss_config": "vdmpp_v",
+        "dropout_rate": 0.1,
+        "augment_wrapper": false,
+        "learned_subsampling": false,
+        "up_down_asymmetry": false,
+        "use_mid_block": true,
+        "lambda_min": -15,
+        "lambda_max": 15,
+        "lambda_noise_schedule": {
+            "type": "cosine",
+            "shift": 0
+        },
+        "weighting": {
+            "type": "sech",
+            "shift": 0,
+            "dynamic": true,
+            "dynamic_min": -5.0,
+            "dynamic_max": 1.0
+        }
+    },
+    "encoder": {
+        "type": "image",
+        "internal_dim": 128,
+        "context_dim": 16,
+        "latent_units": 10
+    },
+    "dataset": {
+        "type": "shapes3d"
+    },
+    "optimizer": {
+        "type": "adamw",
+        "lr": 5e-4,
+        "betas": [0.95, 0.999],
+        "eps": 1e-6,
+        "weight_decay": 1e-3
+    },
+    "lr_sched": {
+        "type": "constant",
+        "warmup": 0.0
+    },
+    "ema_sched": {
+        "type": "inverse",
+        "power": 0.6667,
+        "max_value": 0.9999
+    }
+}

@@ -44,6 +44,8 @@ class DBlock(layers.ConditionedSequential):
         self_attn=False,
         cross_attn=False,
         c_enc=0,
+        rezero=False,
+        init_res_scale=1.0,
     ):
         modules = [nn.Identity()]
         for i in range(n_layers):
@@ -56,7 +58,27 @@ class DBlock(layers.ConditionedSequential):
                 modules.append(layers.SelfAttention2d(my_c_out, n_heads, norm, dropout_rate))
             if cross_attn:
                 norm = lambda c_in: layers.AdaGN(feats_in, c_in, max(1, my_c_out // group_size))
-                modules.append(layers.CrossAttention2d(my_c_out, c_enc, n_heads, norm, dropout_rate))
+                if rezero:
+                    modules.append(
+                        layers.CrossAttention2dReZero(
+                            my_c_out,
+                            c_enc,
+                            n_heads,
+                            norm,
+                            dropout_rate,
+                            init_res_scale=init_res_scale,
+                        )
+                    )
+                else:
+                    modules.append(
+                        layers.CrossAttention2d(
+                            my_c_out,
+                            c_enc,
+                            n_heads,
+                            norm,
+                            dropout_rate,
+                        )
+                    )
         super().__init__(*modules)
         self.set_downsample(downsample, learned_downsample, c_in)
 
@@ -89,6 +111,8 @@ class UBlock(layers.ConditionedSequential):
         self_attn=False,
         cross_attn=False,
         c_enc=0,
+        rezero=False,
+        init_res_scale=1.0,
     ):
         modules = []
         for i in range(n_layers):
@@ -101,7 +125,27 @@ class UBlock(layers.ConditionedSequential):
                 modules.append(layers.SelfAttention2d(my_c_out, n_heads, norm, dropout_rate))
             if cross_attn:
                 norm = lambda c_in: layers.AdaGN(feats_in, c_in, max(1, my_c_out // group_size))
-                modules.append(layers.CrossAttention2d(my_c_out, c_enc, n_heads, norm, dropout_rate))
+                if rezero:
+                    modules.append(
+                        layers.CrossAttention2dReZero(
+                            my_c_out,
+                            c_enc,
+                            n_heads,
+                            norm,
+                            dropout_rate,
+                            init_res_scale=init_res_scale,
+                        )
+                    )
+                else:
+                    modules.append(
+                        layers.CrossAttention2d(
+                            my_c_out,
+                            c_enc,
+                            n_heads,
+                            norm,
+                            dropout_rate,
+                        )
+                    )
         modules.append(nn.Identity())
         super().__init__(*modules)
         self.set_upsample(upsample, learned_upsample, c_out)
@@ -135,6 +179,8 @@ class BottleneckBlock(layers.ConditionedSequential):
         self_attn=False,
         cross_attn=False,
         c_enc=0,
+        rezero=False,
+        init_res_scale=1.0,
     ):
         modules = []
         modules.append(ResConvBlock(feats_in, channels, channels, channels, group_size, dropout_rate))
@@ -143,7 +189,27 @@ class BottleneckBlock(layers.ConditionedSequential):
         if self_attn:
             modules.append(layers.SelfAttention2d(channels, n_heads, norm, dropout_rate))
         if cross_attn:
-            modules.append(layers.CrossAttention2d(channels, c_enc, n_heads, norm, dropout_rate))
+            if rezero:
+                modules.append(
+                    layers.CrossAttention2dReZero(
+                        channels,
+                        c_enc,
+                        n_heads,
+                        norm,
+                        dropout_rate,
+                        init_res_scale=init_res_scale,
+                    )
+                )
+            else:
+                modules.append(
+                    layers.CrossAttention2d(
+                        channels,
+                        c_enc,
+                        n_heads,
+                        norm,
+                        dropout_rate,
+                    )
+                )
         modules.append(ResConvBlock(feats_in, channels, channels, channels, group_size, dropout_rate))
         super().__init__(*modules)
 

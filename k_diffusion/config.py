@@ -3,6 +3,7 @@ import json
 import math
 import pickle
 from pathlib import Path
+from typing import Callable
 
 from jsonmerge import merge
 import torch
@@ -211,6 +212,8 @@ def make_model(config):
             learned_subsampling=config['learned_subsampling'],
             up_down_asymmetry=config['up_down_asymmetry'],
             use_mid_block=config['use_mid_block'],
+            rezero=config['rezero'],
+            init_res_scale=config['init_res_scale'],
         )
         if config['augment_wrapper']:
             model = augmentation.KarrasAugmentWrapper(model)
@@ -395,18 +398,110 @@ def make_lambda_noise_schedule(config):
     return ns
 
 
+class DynamicBandWeighting:
+    """
+    Wraps a base weighting function w_base(lam) and applies
+    a time-dependent band gate in λ-space for the first `max_steps` calls.
+
+    After `max_steps` calls, it returns w_base(lam) unchanged.
+
+    The band starts as [dynamic_min, dynamic_max] and expands
+    linearly to cover [lam_min, lam_max].
+    """
+
+    def __init__(
+        self,
+        base_w_fn: Callable[[torch.Tensor], torch.Tensor],
+        lam_min: float,
+        lam_max: float,
+        dynamic_min: float,
+        dynamic_max: float,
+        max_steps: int,
+        sharpness: float = 10.0,
+    ):
+        self.base_w_fn = base_w_fn
+        self.lam_min = float(lam_min)
+        self.lam_max = float(lam_max)
+        self.dynamic_min = float(dynamic_min)
+        self.dynamic_max = float(dynamic_max)
+        self.max_steps = int(max_steps)
+        self.sharpness = float(sharpness)
+
+        # initial band centre + radius
+        self.mu = 0.5 * (self.dynamic_min + self.dynamic_max)
+        self.r_min = 0.5 * (self.dynamic_max - self.dynamic_min)
+        self.r_max = 0.5 * (self.lam_max - self.lam_min)
+
+        # internal step counter
+        self.step = 0
+
+    def _progress(self) -> float:
+        if self.max_steps <= 0:
+            return 1.0
+        return min(self.step / float(self.max_steps), 1.0)
+
+    def _current_radius(self) -> float:
+        p = self._progress()
+        return self.r_min + p * (self.r_max - self.r_min)
+
+    def _soft_band_gate(self, lam: torch.Tensor) -> torch.Tensor:
+        """
+        Soft gate in λ-space. ≈1 in current band, ≈0 outside.
+        """
+        radius = self._current_radius()
+        if radius <= 0:
+            # degenerate initial case: very tiny band
+            radius = 1e-6
+
+        # keep everything in lam's dtype/device
+        mu = lam.new_tensor(self.mu)
+        left = mu - radius
+        right = mu + radius
+        sharp = self.sharpness
+
+        left_gate = torch.sigmoid(sharp * (lam - left))
+        right_gate = torch.sigmoid(sharp * (right - lam))
+        return left_gate * right_gate
+
+    def __call__(self, lam: torch.Tensor) -> torch.Tensor:
+        """
+        Apply dynamic band weighting to lam.
+
+        - For step < max_steps: w(lam) = gate(λ; step) * w_base(lam)
+        - For step >= max_steps: w(lam) = w_base(lam)
+        """
+        w_base = self.base_w_fn(lam)
+
+        # After curriculum is over, return base weighting
+        if self.step >= self.max_steps:
+            return w_base
+
+        gate = self._soft_band_gate(lam)
+        # increment step *after* using current gate
+        self.step += 1
+
+        return gate * w_base
+
+
 def make_weighting_function(config):
     w_config = config['weighting']
     w_type = w_config['type']
     shift = float(w_config.get('shift', 0.0))
+    gamma = float(w_config.get('gamma', 0.5))
 
     # Optional lambda range for grid-based peak finding
-    lam_min = w_config.get('lam_min', -15.0)
-    lam_max = w_config.get('lam_max', 15.0)
+    lam_min = float(w_config.get('lam_min', -15.0))
+    lam_max = float(w_config.get('lam_max', 15.0))
 
     sigma_data = float(w_config.get('sigma_data', 0.5))
     edm_mu = float(w_config.get('edm_mu', 2.4))
     edm_sigma = float(w_config.get('edm_sigma', 2.4))
+
+    dynamic = bool(w_config.get('dynamic', False))
+    dynamic_min = float(w_config.get('dynamic_min', -3.0))
+    dynamic_max = float(w_config.get('dynamic_max', 2.0))
+    dynamic_steps = int(w_config.get('dynamic_steps', 80000))
+    dynamic_sharpness = float(w_config.get('dynamic_sharpness', 10.0))
 
     def w_edm_fn(lam: torch.Tensor) -> torch.Tensor:
         """
@@ -436,6 +531,11 @@ def make_weighting_function(config):
             lam_shifted = lam + shift
             return 1.0 / torch.cosh(lam_shifted / 2.0)
 
+    elif w_type == 'min_snr':
+        def w_fn(lam):
+            lam_shifted = lam + shift
+            return (1.0 / torch.cosh(lam_shifted / 2.0)) * min(1, gamma * torch.exp(-lam_shifted))
+
     elif w_type == 'edm':
         def w_fn(lam):
             lam_shifted = lam + shift
@@ -463,17 +563,26 @@ def make_weighting_function(config):
     elif w_type == 'sigmoid':
         # w(λ) = sigmoid(−λ + shift)
         def w_fn(lam):
-            lam_shifted = -lam + shift  # optional; you could also treat 'shift' as the k directly
+            lam_shifted = -lam + shift
             return torch.sigmoid(lam_shifted)
 
-    elif w_type == 'laplace':
-        raise NotImplementedError
-
-    elif w_type == 'laplace-monotonic':
+    elif w_type in ('laplace', 'laplace-monotonic'):
         raise NotImplementedError
 
     else:
         raise ValueError(f'Unknown weighting function type: {w_type}')
 
-    return w_fn
+    # ----------------- optional dynamic wrapper -----------------
 
+    if dynamic:
+        w_fn = DynamicBandWeighting(
+            base_w_fn=w_fn,
+            lam_min=lam_min,
+            lam_max=lam_max,
+            dynamic_min=dynamic_min,
+            dynamic_max=dynamic_max,
+            max_steps=dynamic_steps,
+            sharpness=dynamic_sharpness,
+        )
+
+    return w_fn
