@@ -44,12 +44,34 @@ def plot_recon_vs_score(
         if not os.path.exists(metrics_path):
             continue
 
-        df = pd.read_csv(metrics_path).sort_values("nimgs")
+        try:
+            df = pd.read_csv(metrics_path)
+        except Exception as e:
+            print(f"Skipping {run_name}: failed to read metrics.csv ({e})")
+            continue
 
+        # NEW: skip header-only / empty metrics files
+        if df is None or df.empty:
+            print(f"Skipping {run_name}: metrics.csv has no rows (header-only)")
+            continue
+
+        # NEW: require nimgs for sorting / consistency
+        if "nimgs" not in df.columns:
+            print(f"Skipping {run_name}: metrics.csv missing 'nimgs'")
+            continue
+
+        df = df.sort_values("nimgs")
+
+        # NEW: don't hard-fail if this run doesn't have the requested score
         if score_col not in df.columns:
-            raise KeyError(f"{score_col} not in metrics.csv columns: {df.columns}")
+            print(f"Skipping {run_name}: {score_col} not in metrics.csv columns")
+            continue
 
-        score_s = smooth_curve(df[score_col].values)
+        score_s = smooth_curve(df[score_col].dropna().values)
+        if len(score_s) == 0:
+            print(f"Skipping {run_name}: {score_col} has no entries")
+            continue
+
         final_score[run_name] = float(score_s[-1])
 
     if not final_score:
@@ -70,15 +92,46 @@ def plot_recon_vs_score(
     ax_mse, ax_lpips = axes
 
     for run_name in run_dirs:
+        # NEW: only plot runs that were successfully scored above
+        if run_name not in final_score:
+            continue
+
         metrics_path = os.path.join(base_dir, run_name, "metrics.csv")
         if not os.path.exists(metrics_path):
             continue
 
-        df = pd.read_csv(metrics_path).sort_values("nimgs")
+        try:
+            df = pd.read_csv(metrics_path)
+        except Exception:
+            continue
 
-        mse   = smooth_curve(df["mse"].values)
-        lpips = smooth_curve(df["lpips"].values)
-        score = smooth_curve(df[score_col].values)
+        # NEW: skip header-only / empty metrics files
+        if df is None or df.empty:
+            continue
+
+        # NEW: require nimgs for sorting / consistency
+        if "nimgs" not in df.columns:
+            continue
+
+        df = df.sort_values("nimgs")
+
+        # NEW: make sure required columns exist
+        if not {"mse", "lpips", score_col}.issubset(df.columns):
+            continue
+
+        mse   = smooth_curve(df["mse"].dropna().values)
+        lpips = smooth_curve(df["lpips"].dropna().values)
+        score = smooth_curve(df[score_col].dropna().values)
+
+        # NEW: guard against empty series after dropna
+        if len(mse) == 0 or len(lpips) == 0 or len(score) == 0:
+            continue
+
+        # Align lengths if they differ (rare but can happen with NaN dropping)
+        n = min(len(mse), len(lpips), len(score))
+        mse, lpips, score = mse[:n], lpips[:n], score[:n]
+        if n == 0:
+            continue
 
         colour = colour_for_run(run_name, cmap)
 
@@ -92,30 +145,6 @@ def plot_recon_vs_score(
         ax_lpips.scatter(lpips[0],  score[0],  s=10, color=colour)
         ax_lpips.scatter(lpips[-1], score[-1], s=25, color=colour)
 
-        # # extract seeds (take from first row – they should be constant)
-        # model_seed = run_name[0]
-        # t_seed = run_name[1]
-        # label = f"{model_seed},{t_seed}"
-
-        # # --- annotate the start of the curve with seeds ---
-        # # small offset so text isn't exactly on top of the point
-        # offset_x = 1.02 if ax_mse.get_xscale() == "log" else 0.002
-        # ax_mse.text(
-        #     mse[0] * offset_x,  # for log-scale, multiply to move right a bit
-        #     score[0],
-        #     label,
-        #     fontsize=6,
-        #     color=colour,
-        # )
-
-        # ax_lpips.text(
-        #     lpips[0] + 1e-3,    # tiny shift right
-        #     score[0],
-        #     label,
-        #     fontsize=6,
-        #     color=colour,
-        # )
-
     # --- styling ---
     score_label = score_col.upper() if score_col == "dci" else score_col
 
@@ -127,6 +156,9 @@ def plot_recon_vs_score(
     ax_lpips.set_xlabel("LPIPS")
     ax_lpips.set_ylabel(score_label)
     ax_lpips.set_title(f"{score_label} vs LPIPS over training")
+
+    for ax in axes:
+        ax.grid(True, linestyle="--", alpha=0.3)
 
     # --- colourbar outside ---
     norm = mpl.colors.Normalize(vmin=s_min, vmax=s_max)
@@ -150,9 +182,9 @@ def plot_recon_vs_score(
 # base_dir = "ckpts/vdmpp/shapes3d_early_stage"
 # base_dir = "ckpts/vdmpp/shapes3d_early_stage_sech"
 # base_dir = "ckpts/vdmpp/shapes3d_early_stage_sech_dynamic"
-base_dir = "ckpts/vdmpp/shapes3d_early_stage_sech_dynamic_rezero"
+# base_dir = "ckpts/vdmpp/shapes3d_early_stage_sech_dynamic_rezero"
+base_dir = "ckpts/vdmpp_deep/shapes3d/"
 
 plot_recon_vs_score(base_dir, score_col="dci")
 plot_recon_vs_score(base_dir, score_col="factorvae")
 plot_recon_vs_score(base_dir, score_col="mig")
-

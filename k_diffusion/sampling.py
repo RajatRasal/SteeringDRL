@@ -705,6 +705,7 @@ def sample_dpmpp_3m_sde(model, x, sigmas, extra_args=None, callback=None, disabl
 def sample_ddpm_lambda(model, noise, noise_schedule, steps, extra_args={}):
     steps = torch.linspace(1.0, 0.0, steps + 1).to(noise.device)
     x_t = noise
+    B = noise.size(0)
 
     def ddpm_step(model_out, x_t, logsnr_t, logsnr_s):
         c = -torch.special.expm1(logsnr_t - logsnr_s)
@@ -713,6 +714,12 @@ def sample_ddpm_lambda(model, noise, noise_schedule, steps, extra_args={}):
         alpha_s = torch.sqrt(torch.sigmoid(logsnr_s))
         sigma_s = torch.sqrt(torch.sigmoid(-logsnr_s))
 
+        c = utils.append_dims(c, x_t.ndim)
+        alpha_t = utils.append_dims(alpha_t, x_t.ndim)
+        sigma_t = utils.append_dims(sigma_t, x_t.ndim)
+        alpha_s = utils.append_dims(alpha_s, x_t.ndim)
+        sigma_s = utils.append_dims(sigma_s, x_t.ndim)
+
         x_pred = model.to_x(model_out, x_t, sigma_t, alpha_t).clip(-1, 1)
 
         mu = alpha_s * (x_t * (1 - c) / alpha_t + c * x_pred)
@@ -720,8 +727,8 @@ def sample_ddpm_lambda(model, noise, noise_schedule, steps, extra_args={}):
         return mu, var
 
     for i in range(len(steps) - 1):
-        t = steps[i]
-        s = steps[i + 1]
+        t = steps[i].repeat(B)
+        s = steps[i + 1].repeat(B)
 
         logsnr_t = noise_schedule.schedule(t)
         logsnr_s = noise_schedule.schedule(s)
@@ -732,8 +739,10 @@ def sample_ddpm_lambda(model, noise, noise_schedule, steps, extra_args={}):
         x_t = mu + torch.randn_like(mu) * torch.sqrt(var)
 
     # Final step
-    logsnr_1 = noise_schedule.schedule(steps[-2])
-    logsnr_0 = noise_schedule.schedule(steps[-1])
+    t1 = steps[-2].repeat(B)
+    t0 = steps[-1].repeat(B)
+    logsnr_1 = noise_schedule.schedule(t1)
+    logsnr_0 = noise_schedule.schedule(t0)
 
     model_out = model(x_t, logsnr_1, **extra_args)
     x_pred, _ = ddpm_step(model_out, x_t, logsnr_1, logsnr_0)

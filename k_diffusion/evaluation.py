@@ -184,7 +184,8 @@ def evaluate_disentanglement(
     device="cuda",
 ):
     def _representation(x):
-        x = K.utils.normalise(torch.tensor(x).to(device).to(torch.float32).permute(0, 3, 1, 2))
+        x = torch.tensor(x).to(device).to(torch.float32).permute(0, 3, 1, 2)
+        x = K.utils.normalise(x)
         z = net.encoding(x)
         return z.detach().cpu().numpy()
 

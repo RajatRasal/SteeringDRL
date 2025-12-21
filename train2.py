@@ -639,7 +639,7 @@ def main():
         metrics_log.write(
             nimgs,
             elapsed,
-            ema_stats['loss'],
+            ema_stats.get('loss', 0),
             mse.item(),
             lpips.item(),
             dci,
@@ -839,10 +839,14 @@ def main():
                     log_dict['grads/ca_ema'],
                 )
 
-            if evaluate_enabled and nimgs > 0 and (nimgs // args.batch_size) % args.evaluate_every == 0:
-                evaluate()
+            step = nimgs // args.batch_size
 
-            if nimgs >= args.end_nimgs or (nimgs > 0 and (nimgs // args.batch_size) % args.save_every == 0):
+            if evaluate_enabled and nimgs > 0:
+                # if step == 50 or (step <= 30000 and step % 250 == 0) or (step % args.evaluate_every == 0):
+                if step == 50 or (step % args.evaluate_every == 0):
+                    evaluate()
+
+            if nimgs >= args.end_nimgs or (nimgs > 0 and step % args.save_every == 0):
                 save()
 
             if nimgs >= args.end_nimgs:

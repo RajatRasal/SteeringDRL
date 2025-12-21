@@ -101,9 +101,26 @@ def plot_dis_vs_recon(
         metrics_path = os.path.join(base_dir, run_name, "metrics.csv")
         if not os.path.exists(metrics_path):
             continue
-        df = pd.read_csv(metrics_path).sort_values("nimgs")
-        per_run_df[run_name] = df
-
+        try:
+            df = pd.read_csv(metrics_path)
+    
+            # NEW: skip header-only / empty metrics files
+            if df is None or df.empty:
+                print(f"Skipping {run_name}: metrics.csv has no rows (header-only)")
+                continue
+            
+            # NEW: skip files missing nimgs (can't sort / align)
+            if "nimgs" not in df.columns:
+                print(f"Skipping {run_name}: metrics.csv missing 'nimgs' column")
+                continue
+            
+            df = df.sort_values("nimgs")
+            per_run_df[run_name] = df
+    
+        except Exception as e:
+            print(f"Skipping {run_name}: failed to read metrics.csv ({e})")
+            continue
+        
     # ---------- final DIS per model_class (mean over seeds) ----------
     final_dis_by_model: Dict[str, float] = {}
     for model_class, runs in groups.items():
@@ -244,7 +261,9 @@ def plot_dis_vs_recon(
 
 if __name__ == "__main__":
     # base_dir = "ckpts/vdmpp/shapes3d_early_stage_sech_dynamic"
-    base_dir = "ckpts/vdmpp/shapes3d_early_stage_sech_dynamic_rezero"
+    # base_dir = "ckpts/vdmpp/shapes3d_early_stage_sech_dynamic_rezero"
+    # base_dir = "ckpts/vdmpp/shapes3d_early_stage_sech_dynamic_rezero_sharpening"
+    base_dir = "ckpts/vdmpp_deep/shapes3d/"
     # colour by final DCI, plot DCI trajectory
     plot_dis_vs_recon(
         base_dir,

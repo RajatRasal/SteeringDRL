@@ -1,25 +1,54 @@
+# metrics.py
 import os
+from collections import defaultdict
+
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import numpy as np  # NEW
-from collections import defaultdict
+import seaborn as sns
+
 
 # ----------------------------------------------------
 # CONFIG
 # ----------------------------------------------------
-# ROOT = "ckpts/vdmpp/shapes3d_low_discrep
-ROOT = "ckpts/vdmpp/shapes3d_early_stage_sech_dynamic_rezero"
+# ROOT = "ckpts/vdmpp/shapes3d_low_discrep..."
+# ROOT = "ckpts/vdmpp/shapes3d_early_stage/..."
+# ROOT = "ckpts/vdmpp_deep/shapes3d/"
+# ROOT = "ckpts/vdmpp_deep_longer_stable/shapes3d/"
+ROOT = "ckpts/vdmpp_deep_longer_stable2/shapes3d/"
+
 METRICS = ["dci", "factorvae", "mig", "mse", "lpips"]
+
 SAVE_FIGS = True
 OUTDIR = "analysis_plots"
 os.makedirs(OUTDIR, exist_ok=True)
 
 
 # ----------------------------------------------------
-# 1. Walk the directory and gather metrics per model_setting
+# helpers
 # ----------------------------------------------------
-results = defaultdict(list)        # final values
-curves = defaultdict(list)         # NEW: full curves per run
+def final_valid_value(df: pd.DataFrame, metric: str):
+    """Return final valid (non-NaN) value from df[metric], else None."""
+    if df is None or df.empty or metric not in df.columns:
+        return None
+    s = df[metric].dropna()
+    if len(s) == 0:
+        return None
+    v = s.iloc[-1]
+    try:
+        return float(v)
+    except Exception:
+        return None
+
+
+# ----------------------------------------------------
+# 1. Walk the directory and gather metrics per model_setting
+#    Folder naming convention:
+#      "<seed><model_setting>"
+#    e.g. "0shapes3d_v_cosine_sech"
+# ----------------------------------------------------
+results = defaultdict(list)  # final values per run
+curves = defaultdict(list)   # full curves per run (nimgs + metrics)
 
 for folder in os.listdir(ROOT):
     folder_path = os.path.join(ROOT, folder)
@@ -28,36 +57,52 @@ for folder in os.listdir(ROOT):
 
     # expect folder names like "0shapes3d_v_cosine_sech"
     try:
-        seed = int(folder[0])
-        model_setting = folder[1:]
-    except:
+        seed = int(folder[:2])
+        model_setting = folder[2:]
+    except Exception:
         # skip folders not matching the pattern
         continue
+
+    # if "sech" in model_setting:
+    #     continue
 
     metrics_path = os.path.join(folder_path, "metrics.csv")
     if not os.path.exists(metrics_path):
         print(f"Skipping {folder}, no metrics.csv")
         continue
 
-    df = pd.read_csv(metrics_path)
+    try:
+        df = pd.read_csv(metrics_path)
+    except Exception as e:
+        print(f"Skipping {folder}, failed to read metrics.csv: {e}")
+        continue
 
-    # store final values
+    # store final values robustly (handles empty cols / NaNs)
     entry = {}
     for m in METRICS:
-        if m in df.columns:
-            entry[m] = df[m].iloc[-1]  # final value
-        else:
-            entry[m] = None
+        entry[m] = final_valid_value(df, m)
+
+    # optionally skip runs with no usable values
+    if all(entry[m] is None for m in METRICS):
+        print(f"Skipping {folder}, metrics.csv has no usable metric values")
+        continue
+
     results[model_setting].append(entry)
 
-    # NEW: store full curve (nimgs + metrics) for training-efficiency plot
+    # store full curve for training-efficiency plot
     needed_cols = ["nimgs"] + [m for m in METRICS if m in df.columns]
-    curves[model_setting].append(df[needed_cols].copy())
+    if "nimgs" in df.columns:
+        curves[model_setting].append(df[needed_cols].copy())
 
 
 # ----------------------------------------------------
-# 2. Single figure: boxplots (1 row, N metrics)
+# 2. Single figure: VIOLIN plots (1 row, N metrics)
+#    Locatello-ish styling:
+#      - each model has its own colour
+#      - inner box/band
 # ----------------------------------------------------
+sns.set_theme(style="whitegrid", context="talk")
+
 valid_metrics = []
 metric_data_list = []
 
@@ -75,25 +120,62 @@ for metric in METRICS:
     valid_metrics.append(metric)
     metric_data_list.append(data)
 
-# create subplots: one row, one column per metric
 n_metrics = len(valid_metrics)
-fig, axes = plt.subplots(1, n_metrics, figsize=(4 * n_metrics, 8), squeeze=False)
+if n_metrics == 0:
+    raise RuntimeError("No metrics found to plot. Check ROOT / metrics.csv columns.")
+
+# stable model order across all plots
+model_order = sorted(
+    {ms for data in metric_data_list for ms in data.keys()}
+)
+
+# consistent palette: one colour per model
+palette = dict(zip(model_order, sns.color_palette(n_colors=len(model_order))))
+
+fig, axes = plt.subplots(1, n_metrics, figsize=(4.6 * n_metrics, 8), squeeze=False)
+axes = axes[0]
 
 for idx, (metric, data) in enumerate(zip(valid_metrics, metric_data_list)):
-    ax = axes[0, idx]
+    ax = axes[idx]
 
-    labels = list(data.keys())
-    values = [data[label] for label in labels]
+    # long-form df for seaborn
+    rows = []
+    for ms, vals in data.items():
+        for v in vals:
+            rows.append({"model": ms, "value": float(v)})
+    df_plot = pd.DataFrame(rows)
 
-    ax.boxplot(values, labels=labels)
+    sns.violinplot(
+        data=df_plot,
+        x="model",
+        y="value",
+        order=model_order,
+        hue="model",              # colour by model
+        hue_order=model_order,
+        palette=palette,
+        dodge=False,              # don't split / offset
+        inner="box",              # inner band/box
+        cut=0,                    # don't extend beyond min/max
+        linewidth=1.1,
+        saturation=1.0,
+        ax=ax,
+        legend=False,
+    )
+
     ax.set_title(metric)
-    ax.tick_params(axis='x', rotation=90)
+    ax.set_xlabel("")
+    ax.tick_params(axis="x", rotation=90)
     if idx == 0:
         ax.set_ylabel("Score")
+    else:
+        ax.set_ylabel("")
+
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
 
 plt.tight_layout()
 if SAVE_FIGS:
-    fig.savefig(f"{OUTDIR}/all_metrics_boxplots_row.png", dpi=200)
+    fig.savefig(f"{OUTDIR}/all_metrics_violins_row.png", dpi=300, bbox_inches="tight")
 plt.show()
 
 
@@ -101,9 +183,10 @@ plt.show()
 # 3. Mean + Std Error Bar PLOTS (1 row × N metrics) — no connecting lines
 # ----------------------------------------------------
 fig2, axes2 = plt.subplots(1, n_metrics, figsize=(4 * n_metrics, 6), squeeze=False)
+axes2 = axes2[0]
 
 for idx, (metric, data) in enumerate(zip(valid_metrics, metric_data_list)):
-    ax = axes2[0, idx]
+    ax = axes2[idx]
 
     labels = list(data.keys())
     means = [pd.Series(v).mean() for v in data.values()]
@@ -113,22 +196,19 @@ for idx, (metric, data) in enumerate(zip(valid_metrics, metric_data_list)):
         x=range(len(labels)),
         y=means,
         yerr=stds,
-        fmt='o',              # dots only
-        linestyle='none',     # absolutely no connecting lines
-        capsize=5,
-        markersize=6
+        fmt="o",          # dots only
+        capsize=4,
     )
-
+    ax.set_title(metric)
     ax.set_xticks(range(len(labels)))
     ax.set_xticklabels(labels, rotation=90)
-
-    ax.set_title(metric + " (mean ± std)")
     if idx == 0:
         ax.set_ylabel("Score")
+    ax.grid(True, alpha=0.3)
 
 plt.tight_layout()
 if SAVE_FIGS:
-    fig2.savefig(f"{OUTDIR}/all_metrics_mean_std_row.png", dpi=200)
+    fig2.savefig(f"{OUTDIR}/all_metrics_mean_std_row.png", dpi=200, bbox_inches="tight")
 plt.show()
 
 
@@ -137,55 +217,52 @@ plt.show()
 #    Uses groupby over nimgs to handle different run lengths
 # ----------------------------------------------------
 fig3, axes3 = plt.subplots(1, n_metrics, figsize=(4 * n_metrics, 6), squeeze=False)
+axes3 = axes3[0]
 
 for idx, metric in enumerate(valid_metrics):
-    ax = axes3[0, idx]
+    ax = axes3[idx]
 
     for model_setting, runs in curves.items():
         # Only keep runs where this metric is present
-        metric_runs = [r[["nimgs", metric]].dropna(subset=[metric]) 
-                       for r in runs if metric in r.columns]
+        metric_runs = [
+            r[["nimgs", metric]].dropna(subset=[metric])
+            for r in runs
+            if metric in r.columns and "nimgs" in r.columns
+        ]
         if not metric_runs:
             continue
 
-        # Concatenate all seeds into one long DF:
-        # columns: nimgs, metric
-        df_all = pd.concat(metric_runs, ignore_index=True)
+        # concat and aggregate
+        concat = pd.concat(metric_runs, axis=0, ignore_index=True)
+        grouped = concat.groupby("nimgs")[metric].agg(["mean", "std"]).reset_index()
 
-        # Group by nimgs and compute mean/std across seeds
-        grouped = df_all.groupby("nimgs")[metric].agg(["mean", "std"]).reset_index()
+        ax.plot(grouped["nimgs"], grouped["mean"], label=model_setting)
+        # ax.fill_between(
+        #     grouped["nimgs"],
+        #     grouped["mean"] - grouped["std"],
+        #     grouped["mean"] + grouped["std"],
+        #     alpha=0.2,
+        # )
 
-        nimgs = grouped["nimgs"].values
-        mean_curve = grouped["mean"].values
-        std_curve = grouped["std"].values
-
-        ax.plot(nimgs, mean_curve, label=model_setting)
-        # If you want std shading, uncomment:
-        # ax.fill_between(nimgs,
-        #                 mean_curve - std_curve,
-        #                 mean_curve + std_curve,
-        #                 alpha=0.2)
-
-        if metric == "mse":
-            ax.set_ylim(15, 40)
-        if metric == "lpips":
-            ax.set_ylim(0.015, 0.05)
-
-    ax.set_title(f"{metric} vs nimgs")
-    ax.set_xlabel("images seen (nimgs)")
+    ax.set_title(metric)
+    ax.set_xlabel("nimgs")
     if idx == 0:
-        ax.set_ylabel(metric)
-
+        ax.set_ylabel("Score")
     ax.grid(True, alpha=0.3)
 
+    if metric.lower() == "mse":
+        ax.set_ylim(top=200)
+    elif metric.lower() == "lpips":
+        ax.set_ylim(top=0.1)
+
 # Legend (shared)
-handles, labels = axes3[0, 0].get_legend_handles_labels()
+handles, labels = axes3[0].get_legend_handles_labels()
 if handles:
     fig3.legend(handles, labels, loc="upper center", ncol=min(len(labels), 4))
 
 plt.tight_layout(rect=[0, 0, 1, 0.90])  # leave top space for legend
 if SAVE_FIGS:
-    fig3.savefig(f"{OUTDIR}/training_efficiency_vs_nimgs.png", dpi=200)
+    fig3.savefig(f"{OUTDIR}/training_efficiency_vs_nimgs.png", dpi=200, bbox_inches="tight")
 plt.show()
 
 

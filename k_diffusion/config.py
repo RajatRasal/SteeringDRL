@@ -217,6 +217,21 @@ def make_model(config):
         )
         if config['augment_wrapper']:
             model = augmentation.KarrasAugmentWrapper(model)
+    elif config['type'] == 'image_v4':
+        model = models.ImageDenoiserModelV4(
+            in_channels=config['input_channels'],
+            out_channels=config['out_channels'],
+            model_channels=config['model_channels'],
+            num_res_blocks=config['num_res_blocks'],
+            attention_resolutions=config['attention_resolutions'],
+            channel_mult=config['channel_mult'],
+            dropout=config['dropout'],
+            num_heads=config['num_heads'],
+            use_scale_shift_norm=config['use_scale_shift_norm'],
+            transformer_depth=config['transformer_depth'],
+            latent_unit=config['latent_units'],
+            context_dim=config['context_dim'],
+        )
     elif config['type'] == 'image_transformer_v1':
         model = models.ImageTransformerDenoiserModelV1(
             n_layers=config['depth'],
@@ -483,6 +498,49 @@ class DynamicBandWeighting:
         return gate * w_base
 
 
+# class DynamicBandSampler:
+# 
+#     def __init__(self, lam_min, lam_max, dynamic_min, dynamic_max, max_steps):
+#         self.lam_min = float(lam_min)
+#         self.lam_max = float(lam_max)
+#         self.dynamic_min = float(dynamic_min)
+#         self.dynamic_max = float(dynamic_max)
+#         self.max_steps = int(max_steps)
+#         self.step = 0
+# 
+#     def _progress(self):
+#         if self.max_steps <= 0: return 1.0
+#         return min(self.step / float(self.max_steps), 1.0)
+# 
+#     def current_band(self):
+#         p = self._progress()
+#         lam_L = self.dynamic_min + p * (self.lam_min - self.dynamic_min)
+#         lam_R = self.dynamic_max + p * (self.lam_max - self.dynamic_max)
+#         return min(lam_L, lam_R), max(lam_L, lam_R)
+# 
+#     @torch.no_grad()
+#     def sample_t(self, noise_schedule: NoiseSchedule, B, device, dtype, generator):
+#         lam_L, lam_R = self.current_band()
+#         lam_L_t = torch.tensor(lam_L, device=device, dtype=dtype)
+#         lam_R_t = torch.tensor(lam_R, device=device, dtype=dtype)
+# 
+#         tL = noise_schedule.inverse_schedule(lam_L_t)
+#         tR = noise_schedule.inverse_schedule(lam_R_t)
+#         t_lo = torch.minimum(tL, tR).clamp(0., 1.)
+#         t_hi = torch.maximum(tL, tR).clamp(0., 1.)
+# 
+#         Z = (t_hi - t_lo).clamp_min(1e-8)
+# 
+#         u = torch.rand(B, generator=generator, device=device, dtype=dtype)
+#         u = (u + torch.arange(B, device=device, dtype=dtype) / B) % 1.0
+#         t = t_lo + Z * u
+# 
+#         if self.step < self.max_steps:
+#             self.step += 1
+# 
+#         return t, Z
+
+
 def make_weighting_function(config):
     w_config = config['weighting']
     w_type = w_config['type']
@@ -534,7 +592,8 @@ def make_weighting_function(config):
     elif w_type == 'min_snr':
         def w_fn(lam):
             lam_shifted = lam + shift
-            return (1.0 / torch.cosh(lam_shifted / 2.0)) * min(1, gamma * torch.exp(-lam_shifted))
+            gate = torch.clamp(gamma * torch.exp(-lam_shifted), max=1.0)
+            return (1.0 / torch.cosh(lam_shifted / 2.0)) * gate
 
     elif w_type == 'edm':
         def w_fn(lam):

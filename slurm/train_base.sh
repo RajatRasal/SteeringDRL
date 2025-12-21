@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --gres gpu:1
-#SBATCH --output=./slurm_logs_diff/slurm.%N.%j.log
+#SBATCH --output=./slurm_logs/slurm.%N.%j.log
 
 source /vol/cuda/12.9.0/setup.sh
 
@@ -32,12 +32,14 @@ python3 train2.py \
     --exp-name=$5 \
     --sample-n=16 \
     --demo-every=1000 \
-    --evaluate-every=1000 \
+    --evaluate-every=250 \
     --debug-log-every=100 \
-    --save-every=1000000 \
-    --end-nimgs=3000000 \
+    --save-every=10000 \
+    --end-nimgs=5000000 \
     --training-seed=$6
 
+#     --demo-every=1000 \
+#     --evaluate-every=1000 \
 # Gives better metrics for latent_units = 20, but worse visuals
 # --gradient-clipping
 # Prefer using latent_units = 10 without gradient clipping

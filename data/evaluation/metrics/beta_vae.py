@@ -23,15 +23,9 @@ from __future__ import division
 from __future__ import print_function
 # from absl import logging
 import numpy as np
-# from six.moves import range
 from sklearn import linear_model
-# import gin.tf
 
 
-# @gin.configurable(
-#     "beta_vae_sklearn",
-#     blacklist=["ground_truth_data", "representation_function", "random_state",
-#                "artifact_dir"])
 def compute_beta_vae_sklearn(
   ground_truth_data,
   representation_function,

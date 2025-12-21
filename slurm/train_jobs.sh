@@ -1,17 +1,19 @@
 #!/bin/bash
 
-CONFIG_DIR="configs_logsnr/shapes3d"
-SEEDS=4
+CONFIG_DIR="configs_logsnr2/shapes3d"
+SEEDS=3
 BATCH_SIZE=128
-EXP_NAME=vdmpp/shapes3d_early_stage_sech_dynamic_rezero
+EXP_NAME=vdmpp_deep_longer_stable2/shapes3d
 
 for config in "$CONFIG_DIR"/*.json; do
     echo $config
     base=$(basename "$config")
     filename="${base%.*}"
-    for trainseed in $(seq 0 $SEEDS); do
-        sbatch -J "$trainseed-$filename" \
-            -p gpus48 \
-            ./slurm/train_base.sh "$trainseed$filename" $BATCH_SIZE $config 0 $EXP_NAME $trainseed
+    for modelseed in $(seq 0 $SEEDS); do
+        for trainseed in $(seq 0 $SEEDS); do
+            sbatch -J "$modelseed-$trainseed-$filename" \
+                -p gpus24,gpus48 \
+                ./slurm/train_base.sh "$modelseed$trainseed$filename" $BATCH_SIZE $config $modelseed $EXP_NAME $trainseed
+        done
     done
 done
