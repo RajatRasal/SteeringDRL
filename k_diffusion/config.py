@@ -288,6 +288,29 @@ def make_encoder(config):
             context_dim=context_dim,
             latent_unit=latent_units,
         )
+    elif config['encoder']['type'] == 'image_improved':
+        latent_units = config['encoder']['latent_units']
+        return models.ImprovedImageEncoder(
+            d=internal_dim,
+            context_dim=context_dim,
+            latent_unit=latent_units,
+            norm=config['encoder'].get('norm', 'bn'),
+            resnet_updown=config['encoder'].get('resnet_updown', False),
+            res_blocks=config['encoder'].get('res_blocks', 2),
+            rezero=config['encoder'].get('rezero', False),
+            rezero_init=config['encoder'].get('rezero_init', 0.0)
+        )
+    elif config['encoder']['type'] == 'image_improved2':
+        latent_units = config['encoder']['latent_units']
+        return models.ImprovedImageEncoder2(
+            d=internal_dim,
+            context_dim=context_dim,
+            latent_unit=latent_units,
+            res_blocks=config['encoder'].get('res_blocks', 2),
+            tokeniser=config['encoder'].get('tokeniser', 'mlp'),
+            input_layer=config['encoder'].get('input_layer', 'resblock'),
+            flatten=config['encoder'].get('flatten', 'linear'),
+        )
     elif config['encoder']['type'] == 'label':
         dataset_obj = named_data.get_named_ground_truth_data(config['dataset']['type'])
         return models.LabelEncoder(
@@ -404,13 +427,32 @@ def make_lambda_noise_schedule(config):
     shift = ns_config.get('shift', 0)
     lambda_min = config.get('lambda_min', -15)
     lambda_max = config.get('lambda_max', 15)
-    if ns_config['type'] == 'cosine':
-        ns = external2.CosineSchedule(shift, lambda_min, lambda_max)
-    elif ns_config['type'] == 'edm':
-        ns = external2.EDMTrainingSchedule(shift, lambda_min, lambda_max)
-    else:
-        raise ValueError('Unknown lambda noise schedule')
-    return ns
+    lambda_min_start = config.get('lambda_min_start', -15)
+    lambda_max_start = config.get('lambda_max_start', 15)
+    widening_steps = config.get('widening_steps', 0)
+    mu = ns_config.get('mu', 2.4)
+    sigma = ns_config.get('sigma', 2.4)
+
+    schedules = {
+        'cosine': external2.CosineSchedule,
+        'edm': partial(external2.EDMTrainingSchedule, mu=mu, sigma=sigma),
+    }
+    return schedules[ns_config['type']](
+        shift=shift,
+        logsnr_min=lambda_min,
+        logsnr_max=lambda_max,
+        logsnr_min_start=lambda_min_start,
+        logsnr_max_start=lambda_max_start,
+        widening_steps=widening_steps,
+    )
+
+    # if ns_config['type'] == 'cosine':
+    #     ns = external2.CosineSchedule(shift, lambda_min, lambda_max)
+    # elif ns_config['type'] == 'edm':
+    #     ns = external2.EDMTrainingSchedule(shift, lambda_min, lambda_max)
+    # else:
+    #     raise ValueError('Unknown lambda noise schedule')
+    # return ns
 
 
 class DynamicBandWeighting:
@@ -496,49 +538,6 @@ class DynamicBandWeighting:
         self.step += 1
 
         return gate * w_base
-
-
-# class DynamicBandSampler:
-# 
-#     def __init__(self, lam_min, lam_max, dynamic_min, dynamic_max, max_steps):
-#         self.lam_min = float(lam_min)
-#         self.lam_max = float(lam_max)
-#         self.dynamic_min = float(dynamic_min)
-#         self.dynamic_max = float(dynamic_max)
-#         self.max_steps = int(max_steps)
-#         self.step = 0
-# 
-#     def _progress(self):
-#         if self.max_steps <= 0: return 1.0
-#         return min(self.step / float(self.max_steps), 1.0)
-# 
-#     def current_band(self):
-#         p = self._progress()
-#         lam_L = self.dynamic_min + p * (self.lam_min - self.dynamic_min)
-#         lam_R = self.dynamic_max + p * (self.lam_max - self.dynamic_max)
-#         return min(lam_L, lam_R), max(lam_L, lam_R)
-# 
-#     @torch.no_grad()
-#     def sample_t(self, noise_schedule: NoiseSchedule, B, device, dtype, generator):
-#         lam_L, lam_R = self.current_band()
-#         lam_L_t = torch.tensor(lam_L, device=device, dtype=dtype)
-#         lam_R_t = torch.tensor(lam_R, device=device, dtype=dtype)
-# 
-#         tL = noise_schedule.inverse_schedule(lam_L_t)
-#         tR = noise_schedule.inverse_schedule(lam_R_t)
-#         t_lo = torch.minimum(tL, tR).clamp(0., 1.)
-#         t_hi = torch.maximum(tL, tR).clamp(0., 1.)
-# 
-#         Z = (t_hi - t_lo).clamp_min(1e-8)
-# 
-#         u = torch.rand(B, generator=generator, device=device, dtype=dtype)
-#         u = (u + torch.arange(B, device=device, dtype=dtype) / B) % 1.0
-#         t = t_lo + Z * u
-# 
-#         if self.step < self.max_steps:
-#             self.step += 1
-# 
-#         return t, Z
 
 
 def make_weighting_function(config):

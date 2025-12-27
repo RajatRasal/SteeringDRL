@@ -6,4 +6,4 @@ from .image_v3 import ImageDenoiserModelV3
 from .image_v4 import ImageDenoiserModelV4
 from .image_transformer_v1 import ImageTransformerDenoiserModelV1
 from .image_transformer_v2 import ImageTransformerDenoiserModelV2
-from .encoder import ImageEncoder, LabelEncoder
+from .encoder import ImageEncoder, ImprovedImageEncoder, ImprovedImageEncoder2, LabelEncoder

@@ -354,7 +354,7 @@ def main():
     with torch.no_grad(), K.models.flops.flop_counter() as fc:
         x = torch.zeros([1, model_config['input_channels'], size[0] * 4, size[1] * 4], device=device)
         labels = torch.zeros([1, dataset_obj.num_factors], device=device)
-        if encoder_config['type'] == 'image':
+        if encoder_config['type'].startswith('image_'):
             conds = encoder(x)
         elif encoder_config['type'] == 'label':
             conds = encoder(labels)
@@ -460,7 +460,7 @@ def main():
         images = K.utils.normalise(torch.tensor(images).to(torch.float32).to(device).permute(0, 3, 1, 2))
         labels = torch.tensor(labels).to(torch.float32).to(device)
 
-        if encoder_config['type'] == 'image':
+        if encoder_config['type'].startswith('image_'):
             conds = encoder_ema(images)
         elif encoder_config['type'] == 'label':
             conds = encoder_ema(labels)
@@ -504,7 +504,7 @@ def main():
 
         tgt_image = images[-1].unsqueeze(0)
         tgt_label = labels[-1].unsqueeze(0)
-        if encoder_config['type'] == 'image':
+        if encoder_config['type'].startswith('image_'):
             src_conds = encoder_ema.encoding(images)
             tgt_conds = encoder_ema.encoding(tgt_image)
         elif encoder_config['type'] == 'label':
@@ -515,7 +515,7 @@ def main():
         for i in range(tgt_conds.shape[1]):
             edit_conds = src_conds.clone()
             edit_conds[:, i] = tgt_conds[0, i].clone()
-            if encoder_config['type'] == 'image':
+            if encoder_config['type'].startswith('image_'):
                 edit_conds = encoder_ema.split_embedding(edit_conds)
             elif encoder_config['type'] == 'label':
                 edit_conds = encoder_ema(edit_conds)
@@ -581,7 +581,7 @@ def main():
             imgs = K.utils.normalise(data['image'][0].to(device).permute(0, 3, 1, 2))
             labels = data['label'][0].to(device)
 
-            if encoder_config['type'] == 'image':
+            if encoder_config['type'].startswith('image_'):
                 conds = encoder_ema(imgs)
             elif encoder_config['type'] == 'label':
                 conds = encoder_ema(labels)
@@ -609,7 +609,7 @@ def main():
         lpips = lpips / len(dl)
         tqdm.write(f'MSE: {mse.item():g}, LPIPS: {lpips.item():g}')
 
-        if encoder_config['type'] == 'image':
+        if encoder_config['type'].startswith('image_'):
             dis_metrics = K.evaluation.evaluate_disentanglement(
                 encoder_ema,
                 dataset_obj,
@@ -742,7 +742,7 @@ def main():
                 start_timer = time.time()
 
             with K.models.checkpointing(args.checkpointing):
-                if encoder_config['type'] == 'image':
+                if encoder_config['type'].startswith('image_'):
                     conds = encoder(reals)
                 elif encoder_config['type'] == 'label':
                     conds = encoder(factors)

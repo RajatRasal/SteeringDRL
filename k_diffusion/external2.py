@@ -141,12 +141,104 @@ class NoiseSchedule(ABC):
     # ============= Sampling interface (λ, t, p(λ)) ===============
     # ============================================================
 
-    def sample_lambda(self, batch_size, device):
+    def sample_t(self, B, generator, device):
+        u = torch.rand(B, generator=generator).to(device)
+        # Low-discrepency sampler (VDM paper Appendix I.1)
+        t = (u + torch.arange(B, device=device) / B) % 1
+        return t.clamp(min=1e-6, max=1 - 1e-6)
+
+    def sample_lambda(self, batch_size, generator, device):
         """Sample t ~ U[0,1], return λ(t) and its density p(λ)."""
-        t = torch.rand(batch_size, device=device)
+        t = self.sample_t(batch_size, generator, device)
         lam = self.schedule(t)
-        p_lam = self.density(lam)
-        return lam, t, p_lam
+        return lam
+
+
+class BandWideningNoiseSchedule(NoiseSchedule):
+    """
+    Method A: sampling-only λ-band curriculum.
+    Objective (schedule + density) is unchanged.
+    """
+
+    def __init__(
+        self,
+        shift,
+        logsnr_min,
+        logsnr_max,
+        logsnr_min_start,
+        logsnr_max_start,
+        widening_steps,
+    ):
+        assert logsnr_min <= logsnr_min_start <= logsnr_max_start <= logsnr_max
+
+        super().__init__(
+            shift=shift,
+            logsnr_min=logsnr_min,
+            logsnr_max=logsnr_max,
+        )
+
+        self.lam_min_full = logsnr_min
+        self.lam_max_full = logsnr_max
+
+        self.lam_min_start = logsnr_min_start
+        self.lam_max_start = logsnr_max_start
+
+        self.max_steps = widening_steps
+        self.cur_steps = 0
+
+    # ------------------------------------------------------------
+    # Band endpoints in λ-space
+    # ------------------------------------------------------------
+    def _band_lams(self):
+        # if self.cur_steps >= self.max_steps:
+        #     return self.lam_min_full, self.lam_max_full
+        r = self.cur_steps / self.max_steps
+        lam_L = self.lam_min_start + r * (self.lam_min_full - self.lam_min_start)
+        lam_U = self.lam_max_start + r * (self.lam_max_full - self.lam_max_start)
+        return lam_L, lam_U
+
+    # ------------------------------------------------------------
+    # Z(s) = probability mass of band under base sampler
+    # ------------------------------------------------------------
+    def band_mass(self, device, dtype):
+        if self.cur_steps >= self.max_steps:
+            t0 = self.t0.to(device, dtype=dtype)
+            t1 = self.t1.to(device, dtype=dtype)
+            return (t1 - t0)
+
+        lam_L, lam_U = self._band_lams()
+        lam_L = torch.tensor(lam_L, device=device, dtype=dtype)
+        lam_U = torch.tensor(lam_U, device=device, dtype=dtype)
+
+        t_L = self.inverse_schedule(lam_L)
+        t_U = self.inverse_schedule(lam_U)
+
+        return (t_L - t_U).clamp(min=1e-8)
+
+    # ------------------------------------------------------------
+    # Sampling-only modification
+    # ------------------------------------------------------------
+    def sample_t(self, B, generator, device):
+        if self.cur_steps >= self.max_steps:
+            return super().sample_t(B, generator, device)
+
+        lam_L, lam_U = self._band_lams()
+        lam_L = torch.tensor(lam_L, device=device)
+        lam_U = torch.tensor(lam_U, device=device)
+
+        t_L = self.inverse_schedule(lam_L)
+        t_U = self.inverse_schedule(lam_U)
+
+        # LD sampler
+        u = torch.rand(B, generator=generator).to(device=device)
+        t = (u + torch.arange(B, device=device) / B) % 1.0
+
+        t = t_L + (t_U - t_L) * t
+        return t.clamp(min=1e-6, max=1 - 1e-6)
+
+    # ------------------------------------------------------------
+    def increment_step(self):
+        self.cur_steps += 1
 
 
 # -------------------------------------------------
@@ -155,7 +247,7 @@ class NoiseSchedule(ABC):
 # t = (2/π) arctan(e^{-λ/2})
 # p(λ) = sech(λ/2) / (2π)
 # -------------------------------------------------
-class CosineSchedule(NoiseSchedule):
+class CosineSchedule(BandWideningNoiseSchedule):
 
     def schedule_base(self, t: torch.Tensor) -> torch.Tensor:
         # λ(t) = -2 log tan(π t / 2)
@@ -179,16 +271,18 @@ class CosineSchedule(NoiseSchedule):
 # p(λ)   = N(λ; μ, σ^2)
 # defaults: μ = 2.4, σ = 2.4
 # -------------------------------------------------
-class EDMTrainingSchedule(NoiseSchedule):
+class EDMTrainingSchedule(BandWideningNoiseSchedule):
 
     def __init__(
         self,
         mu: float = 2.4,
         sigma: float = 2.4,
-        shift: float = 0.0,
-        logsnr_min=None, logsnr_max=None,
+        *args,
+        **kwargs,
+        # shift: float = 0.0,
+        # logsnr_min=None, logsnr_max=None,
     ):
-        super().__init__(shift=shift, logsnr_min=logsnr_min, logsnr_max=logsnr_max)
+        super().__init__(*args, **kwargs) # shift=shift, logsnr_min=logsnr_min, logsnr_max=logsnr_max)
         self.mu = float(mu)
         self.sigma = float(sigma)
 
@@ -222,7 +316,7 @@ class EDMTrainingSchedule(NoiseSchedule):
 # t(λ) = 1 - (e^{-λ/(2ρ)} - σ_max^{1/ρ}) / (σ_min^{1/ρ} - σ_max^{1/ρ})
 # p(λ) = e^{-λ/(2ρ)} / [ 2ρ (σ_max^{1/ρ} - σ_min^{1/ρ}) ]
 # -------------------------------------------------
-class EDMSamplingSchedule(NoiseSchedule):
+class EDMSamplingSchedule(BandWideningNoiseSchedule):
 
     def __init__(
         self,
@@ -503,7 +597,7 @@ class BaseLogSNRDenoiser(ABC, nn.Module):
         self,
         x0: torch.Tensor,
         weight_fn: Callable,
-        noise_schedule: NoiseSchedule,
+        noise_schedule: BandWideningNoiseSchedule,
         generator: torch.Generator,
         importance_monitor: Optional[ImportanceWeightMonitor] = None,
         **kwargs,
@@ -519,31 +613,30 @@ class BaseLogSNRDenoiser(ABC, nn.Module):
         """
         device = x0.device
         B = x0.shape[0]
-        u = torch.rand(B, generator=generator).to(device=device)
-
-        # Low-discrepency sampler (VDM paper Appendix I.1)
-        t = (u + torch.arange(B, device=device) / B) % 1
 
         # λ, α, σ
-        logsnr = noise_schedule.schedule(t)              # (B,)
-        alpha_t = utils.append_dims(torch.sqrt(torch.sigmoid(logsnr)), 4)
-        sigma_t = utils.append_dims(torch.sqrt(torch.sigmoid(-logsnr)), 4)
+        logsnr = noise_schedule.sample_lambda(B, generator, device)  # (B,)
+        alpha_lam = utils.append_dims(torch.sqrt(torch.sigmoid(logsnr)), 4)
+        sigma_lam = utils.append_dims(torch.sqrt(torch.sigmoid(-logsnr)), 4)
 
-        # forward noising x0 -> x_t
+        # forward noising x0 -> x_lam
         eps = torch.randn(x0.size(), generator=generator).to(device=device)
-        x_t = alpha_t * x0 + sigma_t * eps
+        x_lam = alpha_lam * x0 + sigma_lam * eps
 
         # model prediction
-        model_out = self(x_t, logsnr, **kwargs)
-        eps_pred = self.to_eps(model_out, x_t, sigma_t, alpha_t)
+        model_out = self(x_lam, logsnr, **kwargs)
+        eps_pred = self.to_eps(model_out, x_lam, sigma_lam, alpha_lam)
 
         # importance weight: w(λ) / p(λ)
         w_lambda = weight_fn(logsnr)                        # (B,)
         p_lambda = noise_schedule.density(logsnr)            # (B,)
         importance = w_lambda / (p_lambda + 1e-12)
+        importance = importance * noise_schedule.band_mass(logsnr.device, logsnr.dtype)
 
         importance = utils.append_dims(importance, 4)
         loss = 0.5 * (importance * (eps_pred - eps) ** 2).mean()
+
+        noise_schedule.increment_step()
 
         if importance_monitor is not None:
             importance_monitor(
@@ -607,3 +700,29 @@ class VPredictionDenoiser(BaseLogSNRDenoiser):
         # x0 = (α x_t - σ v) / (α^2 + σ^2)
         return (alpha_t * x_t - sigma_t * v_hat) / denom
 
+
+if __name__ == "__main__":
+    import seaborn as sns
+    sns.set(style="whitegrid")
+
+    import matplotlib.pyplot as plt
+
+    def w_fn(lam):
+        lam_shifted = -lam
+        return torch.sigmoid(lam_shifted)
+
+    ns = CosineSchedule(0, -15, 15, -1, 1, 10)
+    generator = torch.Generator().manual_seed(0)
+    device = torch.device("cuda")
+    for i in range(12):
+        lam = ns.sample_lambda(10000, generator, device)
+        ns.increment_step()
+        sns.kdeplot(
+            w_fn(lam).cpu().numpy(),
+            label=f"s = {i}",
+            bw_adjust=0.8,
+            clip=(-15, 15)
+        )
+    plt.tight_layout()
+    plt.savefig("./ns.pdf")
+    plt.show()

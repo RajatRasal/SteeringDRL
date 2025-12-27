@@ -1,0 +1,61 @@
+{
+    "model": {
+        "type": "image_v4",
+        "loss_config": "vdmpp_v",
+        "input_size": [16, 16],
+        "input_channels": 3,
+        "out_channels": 3,
+        "model_channels": 64,
+        "num_res_blocks": 2,
+        "attention_resolutions": [1, 2, 4],
+        "channel_mult": [1, 2, 4, 4],
+        "dropout": 0,
+        "num_heads": 8,
+        "use_scale_shift_norm": true,
+        "transformer_depth": 1,
+        "context_dim": 16,
+        "latent_units": 10,
+        "lambda_min": -15,
+        "lambda_max": 15,
+        "lambda_min_start": -1,
+        "lambda_max_start": 1,
+        "widening_steps": 1000000,
+        "lambda_noise_schedule": {
+            "type": "cosine",
+            "shift": 0
+        },
+        "weighting": {
+            "type": "sigmoid",
+            "shift": 0
+        }
+    },
+    "encoder": {
+        "type": "image_improved2",
+        "internal_dim": 128,
+        "context_dim": 16,
+        "latent_units": 10,
+        "res_blocks": 6,
+        "tokeniser": "film",
+        "input_layer": "conv",
+        "flatten": "linear"
+    },
+    "dataset": {
+        "type": "shapes3d"
+    },
+    "optimizer": {
+        "type": "adamw",
+        "lr": 5e-4,
+        "betas": [0.95, 0.999],
+        "eps": 1e-6,
+        "weight_decay": 1e-3
+    },
+    "lr_sched": {
+        "type": "constant",
+        "warmup": 0.0
+    },
+    "ema_sched": {
+        "type": "inverse",
+        "power": 0.6667,
+        "max_value": 0.9999
+    }
+}
