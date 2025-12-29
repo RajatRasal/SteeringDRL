@@ -231,6 +231,11 @@ def make_model(config):
             transformer_depth=config['transformer_depth'],
             latent_unit=config['latent_units'],
             context_dim=config['context_dim'],
+            norm_style=config.get('norm_style', False),
+            norm_ctx=config.get('norm_ctx', False),
+            skip_scale=config.get('skip_scale', 'default'),
+            kappa=config.get('kappa', 1.0),
+            skip_dropout_rate=config.get('skip_dropout_rate', 0),
         )
     elif config['type'] == 'image_transformer_v1':
         model = models.ImageTransformerDenoiserModelV1(

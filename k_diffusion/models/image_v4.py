@@ -113,6 +113,21 @@ def max_neg_value(t):
     return -torch.finfo(t.dtype).max
 
 
+class SkipDropout(nn.Module):
+
+    def __init__(self, rate):
+        super().__init__()
+        self.rate = rate
+
+    def forward(self, x):
+        if self.training:
+            batch_size, channels, height, width = x.shape
+            mask = (th.rand(batch_size, channels, 1, 1, device=x.device) > self.rate).float()
+            return x * mask / (1 - self.rate)
+        else:
+            return x
+
+
 # feedforward
 class GEGLU(nn.Module):
     def __init__(self, dim_in, dim_out):
@@ -134,7 +149,7 @@ class FeedForward(nn.Module):
             nn.GELU(),
         ) if not glu else GEGLU(dim, inner_dim)
 
-        # Note: This is important to ensure cross-attention starts at 0 in early training.
+        # Note: This is important to ensure FF starts at 0 in early training.
         # This is important to be able to identify optimisation basins.
         self.net = nn.Sequential(
             project_in,
@@ -150,8 +165,31 @@ def Normalize(in_channels):
     return torch.nn.GroupNorm(num_groups=32, num_channels=in_channels, eps=1e-6, affine=True)
 
 
+class AdaLN(nn.Module):
+    def __init__(self, dim, cond_dim, eps=1e-6):
+        super().__init__()
+        self.ln = nn.LayerNorm(dim, elementwise_affine=False, eps=eps)
+        self.to_scale_shift = nn.Linear(cond_dim, 2 * dim)
+        # At step 0, AdaLN(x | cond) = LN(x)
+        nn.init.zeros_(self.to_scale_shift.weight)
+        nn.init.zeros_(self.to_scale_shift.bias)
+
+    def forward(self, x, cond):
+        x = self.ln(x)
+        scale, shift = self.to_scale_shift(cond).chunk(2, dim=-1)
+        return x * (1 + scale[:, None, :]) + shift[:, None, :]
+
+
 class CrossAttention(nn.Module):
-    def __init__(self, query_dim, context_dim=None, heads=8, dim_head=64, dropout=0.):
+    def __init__(
+        self,
+        query_dim,
+        context_dim=None,
+        heads=8,
+        dim_head=64,
+        dropout=0.,
+        norm_ctx=False,
+    ):
         super().__init__()
         inner_dim = dim_head * heads
         context_dim = default(context_dim, query_dim)
@@ -162,6 +200,8 @@ class CrossAttention(nn.Module):
         self.to_q = nn.Linear(query_dim, inner_dim, bias=False)
         self.to_k = nn.Linear(context_dim, inner_dim, bias=False)
         self.to_v = nn.Linear(context_dim, inner_dim, bias=False)
+
+        self.norm_ctx = nn.LayerNorm(context_dim) if norm_ctx else nn.Identity()
 
         self.to_out = nn.Sequential(
             # Note: This is important to ensure cross-attention starts at 0 in early training.
@@ -179,6 +219,7 @@ class CrossAttention(nn.Module):
 
         q = self.to_q(x)
         context = default(context, x)
+        context = self.norm_ctx(context)
         k = self.to_k(context)
         v = self.to_v(context)
 
@@ -205,19 +246,72 @@ class CrossAttention(nn.Module):
 
 
 class BasicTransformerBlock(nn.Module):
-    def __init__(self, dim, n_heads, d_head, dropout=0., context_dim=None, gated_ff=True):
+    def __init__(
+        self,
+        dim,
+        n_heads,
+        d_head,
+        dropout=0.,
+        context_dim=None,
+        gated_ff=True,
+        norm_style=None, # "adaln",
+        norm_ctx=False,
+    ):
         super().__init__()
-        self.attn1 = CrossAttention(query_dim=dim, heads=n_heads, dim_head=d_head, dropout=dropout)  # is a self-attention
+        self.attn1 = CrossAttention(
+            query_dim=dim,
+            heads=n_heads,
+            dim_head=d_head,
+            dropout=dropout,
+            norm_ctx=norm_ctx,
+        )  # is a self-attention
         self.ff = FeedForward(dim, dropout=dropout, glu=gated_ff)
-        self.attn2 = CrossAttention(query_dim=dim, context_dim=context_dim, heads=n_heads, dim_head=d_head, dropout=dropout)  # is self-attn if context is none
-        self.norm1 = nn.LayerNorm(dim)
-        self.norm2 = nn.LayerNorm(dim)
-        self.norm3 = nn.LayerNorm(dim)
+        self.attn2 = CrossAttention(
+            query_dim=dim,
+            context_dim=context_dim,
+            heads=n_heads,
+            dim_head=d_head,
+            dropout=dropout,
+            norm_ctx=norm_ctx,
+        )  # is self-attn if context is none
+        self.norm_style = norm_style
+        if self.norm_style == "adaln":
+            self.norm1 = AdaLN(dim, 256)
+            self.norm2 = AdaLN(dim, 256)
+            self.norm3 = AdaLN(dim, 256)
+        elif self.norm_style == "hybrid":
+            self.norm1 = nn.LayerNorm(dim)
+            self.norm2 = AdaLN(dim, 256)
+            self.norm3 = nn.LayerNorm(dim)
+        else:
+            self.norm1 = nn.LayerNorm(dim)
+            self.norm2 = nn.LayerNorm(dim)
+            self.norm3 = nn.LayerNorm(dim)
 
-    def forward(self, x, context=None):
-        x = self.attn1(self.norm1(x)) + x
-        x = self.attn2(self.norm2(x), context=context) + x
-        x = self.ff(self.norm3(x)) + x
+        self.h1 = None
+        self.h2 = None
+        self.h3 = None
+
+    def forward(self, x, context=None, emb=None):
+        if self.norm_style == "adaln":
+            self.h1 = self.norm1(x, emb)
+            x = self.attn1(self.h1) + x
+            self.h2 = self.norm2(x, emb)
+            x = self.attn2(self.h2, context=context) + x
+            self.h3 = self.norm3(x, emb)
+            x = self.ff(self.h3) + x
+        elif self.norm_style == "hybrid":
+            self.h1 = self.norm1(x)
+            x = self.attn1(self.h1) + x
+            self.h2 = self.norm2(x, emb)
+            # TODO: SHORTCUT
+            x = self.attn2(self.h2, context=context) + x
+            self.h3 = self.norm3(x)
+            x = self.ff(self.h3) + x
+        else:
+            x = self.attn1(self.norm1(x)) + x
+            x = self.attn2(self.norm2(x), context=context) + x
+            x = self.ff(self.norm3(x)) + x
         return x
 
 
@@ -229,8 +323,17 @@ class SpatialTransformer(nn.Module):
     Then apply standard transformer action.
     Finally, reshape to image
     """
-    def __init__(self, in_channels, n_heads, d_head,
-                 depth=1, dropout=0., context_dim=None):
+    def __init__(
+        self,
+        in_channels,
+        n_heads,
+        d_head,
+        depth=1,
+        dropout=0.,
+        context_dim=None,
+        norm_style=None,
+        norm_ctx=False,
+    ):
         super().__init__()
         self.in_channels = in_channels
         inner_dim = n_heads * d_head
@@ -252,6 +355,8 @@ class SpatialTransformer(nn.Module):
                     d_head,
                     dropout=dropout,
                     context_dim=context_dim,
+                    norm_style=norm_style,
+                    norm_ctx=norm_ctx,
                 )
                 for d in range(depth)
             ]
@@ -267,7 +372,7 @@ class SpatialTransformer(nn.Module):
             )
         )
 
-    def forward(self, x, context=None):
+    def forward(self, x, context=None, emb=None):
         # note: if no context is given, cross-attention defaults to self-attention
         b, c, h, w = x.shape
         x_in = x
@@ -275,9 +380,10 @@ class SpatialTransformer(nn.Module):
         x = self.proj_in(x)
         x = rearrange(x, 'b c h w -> b (h w) c')
         for block in self.transformer_blocks:
-            x = block(x, context=context)
+            x = block(x, context=context, emb=emb)
         x = rearrange(x, 'b (h w) c -> b c h w', h=h, w=w)
         x = self.proj_out(x)
+        # TODO: SHORTCUT
         return x + x_in
 
 
@@ -304,7 +410,7 @@ class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
             if isinstance(layer, TimestepBlock):
                 x = layer(x, emb)
             elif isinstance(layer, SpatialTransformer):
-                x = layer(x, context)
+                x = layer(x, context, emb)
             else:
                 x = layer(x)
         return x
@@ -541,6 +647,11 @@ class ImageDenoiserModelV4(nn.Module):
         use_scale_shift_norm=False,
         transformer_depth=1,
         context_dim=None,
+        norm_style=None,
+        norm_ctx=False,
+        skip_scale="default",
+        kappa=0.5,
+        skip_dropout_rate=0,
     ):
         super().__init__()
         assert context_dim is not None, 'Include the dimension of cross-attention conditioning'
@@ -553,6 +664,9 @@ class ImageDenoiserModelV4(nn.Module):
         self.dropout = dropout
         self.channel_mult = channel_mult
         self.num_heads = num_heads
+        self.skip_scale = skip_scale
+        self.kappa = kappa
+        self.skip_dropout_rate = skip_dropout_rate
 
         time_embed_dim = model_channels * 4
         # self.time_embed = nn.Sequential(
@@ -598,6 +712,8 @@ class ImageDenoiserModelV4(nn.Module):
                             dim_head,
                             depth=transformer_depth,
                             context_dim=context_dim,
+                            norm_style=norm_style,
+                            norm_ctx=norm_ctx,
                         )
                     )
                 self.input_blocks.append(TimestepEmbedSequential(*layers))
@@ -633,7 +749,13 @@ class ImageDenoiserModelV4(nn.Module):
                 use_scale_shift_norm=use_scale_shift_norm,
             ),
             SpatialTransformer(
-                ch, num_heads, dim_head, depth=transformer_depth, context_dim=context_dim
+                ch,
+                num_heads,
+                dim_head,
+                depth=transformer_depth,
+                context_dim=context_dim,
+                norm_style=norm_style,
+                norm_ctx=norm_ctx,
             ),
             ResBlock(
                 ch,
@@ -669,6 +791,8 @@ class ImageDenoiserModelV4(nn.Module):
                             dim_head,
                             depth=transformer_depth,
                             context_dim=context_dim,
+                            norm_style=norm_style,
+                            norm_ctx=norm_ctx,
                         )
                     )
                 if level and i == num_res_blocks:
@@ -693,6 +817,9 @@ class ImageDenoiserModelV4(nn.Module):
             nn.SiLU(),
             zero_module(conv_nd(dims, model_channels, out_channels, 3, padding=1)),
         )
+
+        if self.skip_dropout_rate > 0:
+            self.skip_dropout = SkipDropout(self.skip_dropout_rate)
 
     def param_groups(self, base_lr=2e-4):
         """
@@ -737,14 +864,8 @@ class ImageDenoiserModelV4(nn.Module):
         b = x.shape[0]
         hs = []
 
-        # print("ts:", timesteps.shape)
-        # t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         t_emb = self.timestep_embed(utils.append_dims(timesteps, 2))
-        # print("t_emb:", t_emb.shape)
-        # emb = self.time_embed(t_emb)
         emb = self.time_embed(t_emb)
-        # print("emb:", emb.shape)
-        # print()
         
         context = cross_cond.reshape(b, -1, self.context_dim)
 
@@ -752,8 +873,26 @@ class ImageDenoiserModelV4(nn.Module):
         for module in self.input_blocks:
             h = module(h, emb, context)
             hs.append(h)
+
         h = self.middle_block(h, emb, context)
-        for module in self.output_blocks:
-            h = th.cat([h, hs.pop()], dim=1)
-            h = module(h, emb, context)
-        return self.out(h)
+
+        L = len(self.output_blocks)
+        for i, module in enumerate(self.output_blocks):
+            skip = hs.pop()
+            if self.skip_scale == 'default':
+                scale = 1
+            elif self.skip_scale == 'root_2_cs':
+                scale = 2 ** -0.5
+            elif self.skip_scale == 'cs':
+                power = (L - 1 - i)
+                scale = self.kappa ** power
+            skip = skip * scale
+            if self.skip_dropout_rate > 0 and skip.shape[-1] not in self.attention_resolutions:
+                skip = self.skip_dropout(skip)
+
+            # TODO: SHORTCUT
+            h_in = th.cat([h, skip], dim=1)
+            h = module(h_in, emb, context)
+
+        out = self.out(h)
+        return out

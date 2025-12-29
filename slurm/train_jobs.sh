@@ -3,7 +3,7 @@
 CONFIG_DIR="configs_logsnr2/shapes3d"
 SEEDS=3
 BATCH_SIZE=128
-EXP_NAME=vdmpp_deep_longer_stable2/shapes3d
+EXP_NAME=vdmpp_deep_longer_stable2_improved/shapes3d
 
 for config in "$CONFIG_DIR"/*.json; do
     echo $config

@@ -31,10 +31,10 @@ python3 train2.py \
     --seed=$4 \
     --exp-name=$5 \
     --sample-n=16 \
-    --demo-every=1000 \
-    --evaluate-every=250 \
+    --demo-every=5000 \
+    --evaluate-every=5000 \
     --debug-log-every=100 \
-    --save-every=10000 \
+    --save-every=1000000 \
     --end-nimgs=5000000 \
     --training-seed=$6
 
