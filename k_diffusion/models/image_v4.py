@@ -315,6 +315,11 @@ class BasicTransformerBlock(nn.Module):
         return x
 
 
+def ramp_alpha(progress: float, warmup_frac: float, alpha_min: float = 0.1) -> float:
+    t = min(max(progress / warmup_frac, 0.0), 1.0)  # 0..1 over warmup
+    return alpha_min + (1.0 - alpha_min) * t
+
+
 class SpatialTransformer(nn.Module):
     """
     Transformer block for image-like data.
@@ -333,6 +338,9 @@ class SpatialTransformer(nn.Module):
         context_dim=None,
         norm_style=None,
         norm_ctx=False,
+        learned_residual="rezero",
+        residual_scale=1.,
+        residual_min=None,
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -372,6 +380,13 @@ class SpatialTransformer(nn.Module):
             )
         )
 
+        if learned_residual:
+            self.alpha = nn.Parameter(torch.tensor(residual_scale))
+        else:
+            self.alpha = residual_scale
+        
+        self.residual_min = residual_min
+
     def forward(self, x, context=None, emb=None):
         # note: if no context is given, cross-attention defaults to self-attention
         b, c, h, w = x.shape
@@ -384,7 +399,11 @@ class SpatialTransformer(nn.Module):
         x = rearrange(x, 'b (h w) c -> b c h w', h=h, w=w)
         x = self.proj_out(x)
         # TODO: SHORTCUT
-        return x + x_in
+        if self.residual_min is None:
+            alpha = self.alpha
+        else:
+            alpha = self.residual_min + (1 - self.residual_min) * torch.sigmoid(self.alpha)
+        return x + alpha * x_in
 
 
 class TimestepBlock(nn.Module):
@@ -634,6 +653,7 @@ class ImageDenoiserModelV4(nn.Module):
 
     def __init__(
         self,
+        input_size,
         in_channels,
         out_channels,
         model_channels,
@@ -652,9 +672,13 @@ class ImageDenoiserModelV4(nn.Module):
         skip_scale="default",
         kappa=0.5,
         skip_dropout_rate=0,
+        skip_drop_resolutions=(1, 2, 4),
+        transformer_learned_residual=False,
+        transformer_residual_scale=1.,
     ):
         super().__init__()
         assert context_dim is not None, 'Include the dimension of cross-attention conditioning'
+        assert input_size[0] == input_size[1]
 
         self.in_channels = in_channels
         self.model_channels = model_channels
@@ -667,6 +691,7 @@ class ImageDenoiserModelV4(nn.Module):
         self.skip_scale = skip_scale
         self.kappa = kappa
         self.skip_dropout_rate = skip_dropout_rate
+        self.skip_drop_resolutions = skip_drop_resolutions
 
         time_embed_dim = model_channels * 4
         # self.time_embed = nn.Sequential(
@@ -678,6 +703,8 @@ class ImageDenoiserModelV4(nn.Module):
         self.time_embed = MappingNet(model_channels, time_embed_dim, n_layers=2)
         self.context_dim = context_dim
         self.latent_unit = latent_unit
+
+        self.skip_drop_sizes = set()
 
         self.input_blocks = nn.ModuleList(
             [
@@ -714,11 +741,15 @@ class ImageDenoiserModelV4(nn.Module):
                             context_dim=context_dim,
                             norm_style=norm_style,
                             norm_ctx=norm_ctx,
+                            learned_residual=transformer_learned_residual,
+                            residual_scale=transformer_residual_scale,
                         )
                     )
                 self.input_blocks.append(TimestepEmbedSequential(*layers))
                 self._feature_size += ch
                 input_block_chans.append(ch)
+            if ds in self.skip_drop_resolutions:
+                self.skip_drop_sizes.add(input_size[0] // ds)
             if level != len(channel_mult) - 1:
                 out_ch = ch
                 self.input_blocks.append(
@@ -756,6 +787,8 @@ class ImageDenoiserModelV4(nn.Module):
                 context_dim=context_dim,
                 norm_style=norm_style,
                 norm_ctx=norm_ctx,
+                learned_residual=transformer_learned_residual,
+                residual_scale=transformer_residual_scale,
             ),
             ResBlock(
                 ch,
@@ -793,6 +826,8 @@ class ImageDenoiserModelV4(nn.Module):
                             context_dim=context_dim,
                             norm_style=norm_style,
                             norm_ctx=norm_ctx,
+                            learned_residual=transformer_learned_residual,
+                            residual_scale=transformer_residual_scale,
                         )
                     )
                 if level and i == num_res_blocks:
@@ -887,9 +922,10 @@ class ImageDenoiserModelV4(nn.Module):
                 power = (L - 1 - i)
                 scale = self.kappa ** power
             skip = skip * scale
-            if self.skip_dropout_rate > 0 and skip.shape[-1] not in self.attention_resolutions:
-                skip = self.skip_dropout(skip)
-
+            # if self.skip_dropout_rate > 0 and skip.shape[-1] in self.attention_resolutions:
+            # if skip.shape[-1] in self.attention_resolutions:
+            if skip.shape[-1] in self.skip_drop_sizes:
+                skip = th.zeros_like(skip)
             # TODO: SHORTCUT
             h_in = th.cat([h, skip], dim=1)
             h = module(h_in, emb, context)

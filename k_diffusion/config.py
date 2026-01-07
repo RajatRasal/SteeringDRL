@@ -219,6 +219,7 @@ def make_model(config):
             model = augmentation.KarrasAugmentWrapper(model)
     elif config['type'] == 'image_v4':
         model = models.ImageDenoiserModelV4(
+            input_size=config['input_size'],
             in_channels=config['input_channels'],
             out_channels=config['out_channels'],
             model_channels=config['model_channels'],
@@ -236,6 +237,31 @@ def make_model(config):
             skip_scale=config.get('skip_scale', 'default'),
             kappa=config.get('kappa', 1.0),
             skip_dropout_rate=config.get('skip_dropout_rate', 0),
+            skip_drop_resolutions=config.get('skip_drop_resolutions', [1, 2, 4]),
+            transformer_learned_residual=config.get('transformer_learned_residual', False),
+            transformer_residual_scale=config.get('transformer_residual_scale', 1.),
+        )
+    elif config['type'] == 'image_v5':
+        model = models.ImageDenoiserModelV5(
+            input_size=config['input_size'],
+            in_channels=config['input_channels'],
+            out_channels=config['out_channels'],
+            model_channels=config['model_channels'],
+            num_res_blocks=config['num_res_blocks'],
+            attention_resolutions=config['attention_resolutions'],
+            channel_mult=config['channel_mult'],
+            dropout=config['dropout'],
+            num_heads=config['num_heads'],
+            use_scale_shift_norm=config['use_scale_shift_norm'],
+            transformer_depth=config['transformer_depth'],
+            latent_unit=config['latent_units'],
+            context_dim=config['context_dim'],
+            norm_style=config.get('norm_style', False),
+            norm_ctx=config.get('norm_ctx', False),
+            skip_scale=config.get('skip_scale', 'default'),
+            kappa=config.get('kappa', 1.0),
+            transformer_learned_residual=config.get('transformer_learned_residual', False),
+            transformer_residual_scale=config.get('transformer_residual_scale', 1.),
         )
     elif config['type'] == 'image_transformer_v1':
         model = models.ImageTransformerDenoiserModelV1(
