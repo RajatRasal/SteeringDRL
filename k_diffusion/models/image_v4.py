@@ -675,6 +675,7 @@ class ImageDenoiserModelV4(nn.Module):
         skip_drop_resolutions=(1, 2, 4),
         transformer_learned_residual=False,
         transformer_residual_scale=1.,
+        transformer_residual_min=None,
     ):
         super().__init__()
         assert context_dim is not None, 'Include the dimension of cross-attention conditioning'
@@ -743,6 +744,7 @@ class ImageDenoiserModelV4(nn.Module):
                             norm_ctx=norm_ctx,
                             learned_residual=transformer_learned_residual,
                             residual_scale=transformer_residual_scale,
+                            residual_min=transformer_residual_min,
                         )
                     )
                 self.input_blocks.append(TimestepEmbedSequential(*layers))
@@ -789,6 +791,7 @@ class ImageDenoiserModelV4(nn.Module):
                 norm_ctx=norm_ctx,
                 learned_residual=transformer_learned_residual,
                 residual_scale=transformer_residual_scale,
+                residual_min=transformer_residual_min,
             ),
             ResBlock(
                 ch,
@@ -828,6 +831,7 @@ class ImageDenoiserModelV4(nn.Module):
                             norm_ctx=norm_ctx,
                             learned_residual=transformer_learned_residual,
                             residual_scale=transformer_residual_scale,
+                            residual_min=transformer_residual_min,
                         )
                     )
                 if level and i == num_res_blocks:

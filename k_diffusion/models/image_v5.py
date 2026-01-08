@@ -14,12 +14,16 @@ from k_diffusion.models.image_v4 import (
 )
 
 
-class GatedResidualGain(nn.Module):
+class Erf(nn.Module):
 
-    def __init__(self):
-        super().__init__()
+    def forward(self, x):
+        return th.special.erf(x)
 
-    def forward(self, )
+
+class Atan(nn.Module):
+
+    def forward(self, x):
+        return th.atan(x)
 
 
 class ImageDenoiserModelV5(nn.Module):
@@ -65,6 +69,9 @@ class ImageDenoiserModelV5(nn.Module):
         norm_ctx=False,
         skip_scale="default",
         kappa=0.5,
+        skip_residual_init=None,
+        skip_residual_constraint="identity",
+        skip_residual_scale=1.,
         transformer_learned_residual=False,
         transformer_residual_scale=1.,
     ):
@@ -82,6 +89,7 @@ class ImageDenoiserModelV5(nn.Module):
         self.num_heads = num_heads
         self.skip_scale = skip_scale
         self.kappa = kappa
+        self.skip_residual_init = skip_residual_init
 
         time_embed_dim = model_channels * 4
         self.timestep_embed = FourierFeatures(1, model_channels)
@@ -98,8 +106,7 @@ class ImageDenoiserModelV5(nn.Module):
         ds = 1
         for level, mult in enumerate(channel_mult):
             layers = []
-            for block_no in range(num_res_blocks):
-                # print("enc", level, block_no, ch, mult * model_channels)
+            for _ in range(num_res_blocks):
                 layers.append(
                     ResBlock(
                         ch,
@@ -129,7 +136,6 @@ class ImageDenoiserModelV5(nn.Module):
             self.enc_blocks[str(level)] = TimestepEmbedSequential(*layers)
             if level != len(channel_mult) - 1:
                 out_ch = ch
-                # print("enc:", level, ch, out_ch)
                 self.down_blocks[str(level)] = TimestepEmbedSequential(
                     ResBlock(
                         ch,
@@ -177,12 +183,10 @@ class ImageDenoiserModelV5(nn.Module):
 
         self.dec_blocks = nn.ModuleDict()
         self.up_blocks = nn.ModuleDict()
-        # print()
 
         for level, mult in list(enumerate(channel_mult))[::-1]:
             layers = []
-            for block_no in range(num_res_blocks + 1):
-                # print("dec", level, block_no, ch, mult * model_channels)
+            for _ in range(num_res_blocks + 1):
                 layers.append(
                     ResBlock(
                         ch,
@@ -212,7 +216,6 @@ class ImageDenoiserModelV5(nn.Module):
             self.dec_blocks[str(level)] = TimestepEmbedSequential(*layers)
             if level:
                 out_ch = ch
-                # print("dec:", level, ch, out_ch)
                 self.up_blocks[str(level)] = TimestepEmbedSequential(
                     ResBlock(
                         ch,
@@ -234,10 +237,19 @@ class ImageDenoiserModelV5(nn.Module):
             zero_module(conv_nd(dims, model_channels, out_channels, 3, padding=1)),
         )
 
-        # print(self.enc_blocks.keys())
-        # print(self.down_blocks.keys())
-        # print(self.dec_blocks.keys())
-        # print(self.up_blocks.keys())
+        if skip_residual_init is not None:
+            self.skip_residuals = nn.ParameterDict()
+            for level in range(len(self.channel_mult)):
+                self.skip_residuals[str(level)] = nn.Parameter(th.tensor(skip_residual_init))
+            self.skip_residual_constraint = {
+                "identity": nn.Identity(),
+                "tanh": nn.Tanh(),
+                "sigmoid": nn.Sigmoid(),
+                "softsign": nn.Softsign(),
+                "erf": Erf(), 
+                "arctan": Atan(),
+            }[skip_residual_constraint]
+            self.skip_residual_scale = skip_residual_scale
 
     def param_groups(self, base_lr=2e-4):
         """
@@ -304,10 +316,14 @@ class ImageDenoiserModelV5(nn.Module):
         else:
             z = self._forward(lvl + 1, d, emb, context)
 
-        h_u = self.dec_blocks[lvl_key](z, emb, context) + h_d
+        if self.skip_residual_init is not None:
+            skip = self.skip_residual_constraint(self.skip_residuals[lvl_key] / self.skip_residual_scale) * h_d
+        else:
+            skip = h_d
+
+        h_u = self.dec_blocks[lvl_key](z, emb, context) + skip
         u = self.up_blocks[lvl_key](h_u, emb, context)
 
-        # print(f"{lvl}, x: {x.shape}, z: {z.shape}, h_d: {h_d.shape}, h_u: {h_u.shape}, d: {d.shape}, u: {u.shape}")
         return u
 
 

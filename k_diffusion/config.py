@@ -260,6 +260,9 @@ def make_model(config):
             norm_ctx=config.get('norm_ctx', False),
             skip_scale=config.get('skip_scale', 'default'),
             kappa=config.get('kappa', 1.0),
+            skip_residual_init=config.get('skip_residual_init', None),
+            skip_residual_constraint=config.get('skip_residual_constraint', 'identity'),
+            skip_residual_scale=config.get('skip_residual_scale', 1.),
             transformer_learned_residual=config.get('transformer_learned_residual', False),
             transformer_residual_scale=config.get('transformer_residual_scale', 1.),
         )
