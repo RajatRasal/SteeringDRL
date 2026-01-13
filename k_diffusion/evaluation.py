@@ -203,7 +203,7 @@ def evaluate_disentanglement(
             batch_size=64,
         )
         print("beta VAE score:" + str(result_dict))
-        metrics["beta_vae_score"] = result_dict
+        metrics["BetaVAE"] = result_dict
     if dci_score:
         from data.evaluation.metrics.dci import compute_dci
         result_dict = compute_dci(
@@ -216,7 +216,7 @@ def evaluate_disentanglement(
             batch_size=64,
         )
         print("dci score:" + str(result_dict))
-        metrics["dci_score"] = result_dict
+        metrics["DCI"] = result_dict
     if factor_VAE_score:
         from data.evaluation.metrics.factor_vae import compute_factor_vae
         result_dict = compute_factor_vae(
@@ -231,7 +231,7 @@ def evaluate_disentanglement(
             prune_threshold=0.05,
         )
         print("factor VAE score:" + str(result_dict))
-        metrics["factor_VAE_score"] = result_dict
+        metrics["FactorVAE"] = result_dict
     if MIG:
         from data.evaluation.metrics.mig import compute_mig
         from data.evaluation.metrics.utils import _histogram_discretize
@@ -249,3 +249,41 @@ def evaluate_disentanglement(
         metrics["MIG"] = result_dict
 
     return metrics
+
+
+def evaluate_segmentation(encoder, val_loader):
+    from data.ocl.evaluation.test_seg import eval_masks, AverageMeter
+    from tqdm import tqdm
+    results = {}
+    for data_dict in tqdm(val_loader):
+        data_dict = {k: v.cuda() for k, v in data_dict.items()}
+        _, pred_masks = encoder.encode(data_dict['img'])  # [B, N(, 1), H, W]
+        if len(pred_masks.shape) == 5:
+            pred_masks = pred_masks.squeeze(-3)
+        gt_masks = data_dict['masks'].long()  # [B, H, W]
+        # on VOC and COCO, some pixels are ignored during evaluation
+        inst_overlap_masks = data_dict.get('inst_overlap_masks', None)
+        mask_dict = eval_masks(pred_masks, gt_masks, inst_overlap_masks)
+        # on VOC and COCO, we compute metrics with semantic and instance masks
+        # if val_loader.dataset.lower() in ['coco', 'voc']:
+        if 'sem_masks' in data_dict:
+            mask_dict = {f'inst/{k}': v for k, v in mask_dict.items()}
+            gt_sem_masks = data_dict['sem_masks']
+            sem_mask_dict = eval_masks(
+                pred_masks, gt_sem_masks, inst_overlap_masks,
+            )
+            sem_mask_dict = {f'sem/{k}': v for k, v in sem_mask_dict.items()}
+            mask_dict.update(sem_mask_dict)
+
+        B = pred_masks.shape[0]
+        if not results:
+            results = {k: AverageMeter() for k in mask_dict}
+        for k, v in mask_dict.items():
+            results[k].update(v, B)
+
+        torch.cuda.empty_cache()
+
+    for k, v in results.items():
+        print(f'{k}: {(v.avg * 100.):.2f}')
+
+    return {k: v.avg for k, v in results.items()}

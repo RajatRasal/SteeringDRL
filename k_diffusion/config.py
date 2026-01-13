@@ -11,6 +11,7 @@ from torch.distributions import Normal
 
 from . import augmentation, layers, models, utils, external, external2
 from data.ground_truth import named_data
+from vqvae.VQVAE import VQVAE
 
 
 def round_to_power_of_two(x, tol):
@@ -229,6 +230,8 @@ def make_model(config):
             dropout=config['dropout'],
             num_heads=config['num_heads'],
             use_scale_shift_norm=config['use_scale_shift_norm'],
+            resblock_updown=config.get('resblock_updown', True),
+            conv_resample=config.get('conv_resample', False),
             transformer_depth=config['transformer_depth'],
             latent_unit=config['latent_units'],
             context_dim=config['context_dim'],
@@ -243,7 +246,6 @@ def make_model(config):
         )
     elif config['type'] == 'image_v5':
         model = models.ImageDenoiserModelV5(
-            input_size=config['input_size'],
             in_channels=config['input_channels'],
             out_channels=config['out_channels'],
             model_channels=config['model_channels'],
@@ -253,6 +255,8 @@ def make_model(config):
             dropout=config['dropout'],
             num_heads=config['num_heads'],
             use_scale_shift_norm=config['use_scale_shift_norm'],
+            resblock_updown=config.get('resblock_updown', True),
+            conv_resample=config.get('conv_resample', False),
             transformer_depth=config['transformer_depth'],
             latent_unit=config['latent_units'],
             context_dim=config['context_dim'],
@@ -312,8 +316,9 @@ def make_model(config):
 
 
 def make_encoder(config):
-    internal_dim = config['encoder']['internal_dim']
-    context_dim = config['encoder']['context_dim']
+    if config['encoder']['type'] != 'slot':
+        internal_dim = config['encoder']['internal_dim']
+        context_dim = config['encoder']['context_dim']
 
     if config['encoder']['type'] == 'image':
         latent_units = config['encoder']['latent_units']
@@ -345,6 +350,12 @@ def make_encoder(config):
             input_layer=config['encoder'].get('input_layer', 'resblock'),
             flatten=config['encoder'].get('flatten', 'linear'),
         )
+    elif config['encoder']['type'] == 'slot':
+        return models.SlotEncoder(
+            resolution=(128, 128) if config['dataset']['type'] == 'clevrtex' else (224, 224),
+            slot_dict=config['encoder']['slot_dict'],
+            enc_dict=config['encoder']['enc_dict'],
+        )
     elif config['encoder']['type'] == 'label':
         dataset_obj = named_data.get_named_ground_truth_data(config['dataset']['type'])
         return models.LabelEncoder(
@@ -361,18 +372,41 @@ VQVAE_CKPT_PATHS = {
     'shapes3d': 'ckpts/vqvae/2_shapes3d_True_32_128_5e-05/training-state-030000.pkl',
     'mpi3d': 'ckpts/vqvae/0_mpi3d_True_32_128_5e-05/training-state-030000.pkl',
     'cars3d': 'ckpts/vqvae/0_cars3d_True_32_128_5e-05/training-state-030000.pkl',
+    'clevrtex': 'ckpts/vqvae/clevrtex/vqvae_clevrtex_params-res128.pth',
+    'coco': 'ckpts/vqvae/coco/vqvae_coco_params-res224.pth',
+    'voc': 'ckpts/vqvae/voc/vqvae_voc_params-res224.pth',
 }
 
 def make_vqvae(config):
     dataset = config['dataset']['type']
-    vqvae_ckpt_path = VQVAE_CKPT_PATHS[dataset]
-    with open(vqvae_ckpt_path, "rb") as f:
-        data = pickle.load(f)
-    vqvae = data["net"].eval()
-    for p in vqvae.parameters():
-        p.requires_grad_(False)
+    path = VQVAE_CKPT_PATHS[dataset]
+    if dataset in ['shapes3d', 'mpi3d', 'cars3d']:
+        with open(path, "rb") as f:
+            data = pickle.load(f)
+        vqvae = data["net"].eval()
+        for p in vqvae.parameters():
+            p.requires_grad_(False)
+    else:        
+        ckpt = torch.load(path, map_location='cpu')
+        vqvae = VQVAE(
+            enc_dec_dict=dict(
+                resolution=128 if dataset == 'clevrtex' else 224,
+                in_channels=3,
+                z_channels=3,
+                ch=64,  # base_channel
+                ch_mult=[1, 2, 4],  # num_down = len(ch_mult)-1
+                num_res_blocks=2,
+                attn_resolutions=[],
+                out_ch=3,
+                dropout=0.0,
+            ),
+            vq_dict=dict(
+                n_embed=4096,  # vocab_size
+                embed_dim=3,  # same as `z_channels`
+            ),
+        )
+        vqvae.load_state_dict(ckpt, strict=True)
     return vqvae
-
 
 def make_denoiser_wrapper(config):
     config = config['model']

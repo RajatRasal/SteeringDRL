@@ -7,6 +7,7 @@ from torch.nn import functional as F
 
 from k_diffusion.models.image_v4 import normalization, conv_nd, Downsample, zero_module
 from k_diffusion.dino import dino
+from k_diffusion.resnet import resnet18, resnet34
 
 
 ##################
@@ -1053,6 +1054,9 @@ class SlotEncoder(nn.Module):
 
         # [B, N, C], [B, N, H, W]
         return slots, masks
+
+    def forward(self, img):
+        return self.encode(img)[0]
 
 
 if __name__ == "__main__":

@@ -5,6 +5,8 @@ from k_diffusion.models.image_v2 import MappingNet
 from k_diffusion import utils
 from k_diffusion.layers import FourierFeatures
 from k_diffusion.models.image_v4 import (
+    Downsample,
+    Upsample,
     SpatialTransformer,
     ResBlock,
     TimestepEmbedSequential,
@@ -51,7 +53,6 @@ class ImageDenoiserModelV5(nn.Module):
 
     def __init__(
         self,
-        input_size,
         in_channels,
         out_channels,
         model_channels,
@@ -63,6 +64,8 @@ class ImageDenoiserModelV5(nn.Module):
         dims=2,
         num_heads=8,
         use_scale_shift_norm=False,
+        resblock_updown=True,
+        conv_resample=False,
         transformer_depth=1,
         context_dim=None,
         norm_style=None,
@@ -77,7 +80,6 @@ class ImageDenoiserModelV5(nn.Module):
     ):
         super().__init__()
         assert context_dim is not None, 'Include the dimension of cross-attention conditioning'
-        assert input_size[0] == input_size[1]
 
         self.in_channels = in_channels
         self.model_channels = model_channels
@@ -129,6 +131,7 @@ class ImageDenoiserModelV5(nn.Module):
                             context_dim=context_dim,
                             norm_style=norm_style,
                             norm_ctx=norm_ctx,
+                            adaln_ctx_dim=time_embed_dim,
                             learned_residual=transformer_learned_residual,
                             residual_scale=transformer_residual_scale,
                         )
@@ -145,6 +148,12 @@ class ImageDenoiserModelV5(nn.Module):
                         dims=dims,
                         use_scale_shift_norm=use_scale_shift_norm,
                         down=True,
+                    ) if resblock_updown else
+                    Downsample(
+                        ch,
+                        conv_resample,
+                        dims=dims, 
+                        out_channels=out_ch,
                     )
                 )
                 ch = out_ch
@@ -169,6 +178,7 @@ class ImageDenoiserModelV5(nn.Module):
                 context_dim=context_dim,
                 norm_style=norm_style,
                 norm_ctx=norm_ctx,
+                adaln_ctx_dim=time_embed_dim,
                 learned_residual=transformer_learned_residual,
                 residual_scale=transformer_residual_scale,
             ),
@@ -209,6 +219,7 @@ class ImageDenoiserModelV5(nn.Module):
                             context_dim=context_dim,
                             norm_style=norm_style,
                             norm_ctx=norm_ctx,
+                            adaln_ctx_dim=time_embed_dim,
                             learned_residual=transformer_learned_residual,
                             residual_scale=transformer_residual_scale,
                         )
@@ -225,6 +236,12 @@ class ImageDenoiserModelV5(nn.Module):
                         dims=dims,
                         use_scale_shift_norm=use_scale_shift_norm,
                         up=True,
+                    ) if resblock_updown else
+                    Upsample(
+                        ch,
+                        conv_resample,
+                        dims=dims, 
+                        out_channels=out_ch,
                     )
                 )
                 ds //= 2
@@ -248,6 +265,7 @@ class ImageDenoiserModelV5(nn.Module):
                 "softsign": nn.Softsign(),
                 "erf": Erf(), 
                 "arctan": Atan(),
+                "softplus": nn.Softplus(),
             }[skip_residual_constraint]
             self.skip_residual_scale = skip_residual_scale
 

@@ -256,6 +256,7 @@ class BasicTransformerBlock(nn.Module):
         gated_ff=True,
         norm_style=None, # "adaln",
         norm_ctx=False,
+        adaln_ctx_dim=256,
     ):
         super().__init__()
         self.attn1 = CrossAttention(
@@ -276,12 +277,12 @@ class BasicTransformerBlock(nn.Module):
         )  # is self-attn if context is none
         self.norm_style = norm_style
         if self.norm_style == "adaln":
-            self.norm1 = AdaLN(dim, 256)
-            self.norm2 = AdaLN(dim, 256)
-            self.norm3 = AdaLN(dim, 256)
+            self.norm1 = AdaLN(dim, adaln_ctx_dim)
+            self.norm2 = AdaLN(dim, adaln_ctx_dim)
+            self.norm3 = AdaLN(dim, adaln_ctx_dim)
         elif self.norm_style == "hybrid":
             self.norm1 = nn.LayerNorm(dim)
-            self.norm2 = AdaLN(dim, 256)
+            self.norm2 = AdaLN(dim, adaln_ctx_dim)
             self.norm3 = nn.LayerNorm(dim)
         else:
             self.norm1 = nn.LayerNorm(dim)
@@ -338,6 +339,7 @@ class SpatialTransformer(nn.Module):
         context_dim=None,
         norm_style=None,
         norm_ctx=False,
+        adaln_ctx_dim=256,
         learned_residual="rezero",
         residual_scale=1.,
         residual_min=None,
@@ -365,6 +367,7 @@ class SpatialTransformer(nn.Module):
                     context_dim=context_dim,
                     norm_style=norm_style,
                     norm_ctx=norm_ctx,
+                    adaln_ctx_dim=adaln_ctx_dim,
                 )
                 for d in range(depth)
             ]
@@ -665,6 +668,8 @@ class ImageDenoiserModelV4(nn.Module):
         dims=2,
         num_heads=8,
         use_scale_shift_norm=False,
+        resblock_updown=True,
+        conv_resample=False,
         transformer_depth=1,
         context_dim=None,
         norm_style=None,
@@ -742,6 +747,7 @@ class ImageDenoiserModelV4(nn.Module):
                             context_dim=context_dim,
                             norm_style=norm_style,
                             norm_ctx=norm_ctx,
+                            adaln_ctx_dim=time_embed_dim,
                             learned_residual=transformer_learned_residual,
                             residual_scale=transformer_residual_scale,
                             residual_min=transformer_residual_min,
@@ -764,6 +770,12 @@ class ImageDenoiserModelV4(nn.Module):
                             dims=dims,
                             use_scale_shift_norm=use_scale_shift_norm,
                             down=True,
+                        ) if resblock_updown else
+                        Downsample(
+                            ch,
+                            conv_resample,
+                            dims=dims, 
+                            out_channels=out_ch,
                         )
                     )
                 )
@@ -789,6 +801,7 @@ class ImageDenoiserModelV4(nn.Module):
                 context_dim=context_dim,
                 norm_style=norm_style,
                 norm_ctx=norm_ctx,
+                adaln_ctx_dim=time_embed_dim,
                 learned_residual=transformer_learned_residual,
                 residual_scale=transformer_residual_scale,
                 residual_min=transformer_residual_min,
@@ -829,6 +842,7 @@ class ImageDenoiserModelV4(nn.Module):
                             context_dim=context_dim,
                             norm_style=norm_style,
                             norm_ctx=norm_ctx,
+                            adaln_ctx_dim=time_embed_dim,
                             learned_residual=transformer_learned_residual,
                             residual_scale=transformer_residual_scale,
                             residual_min=transformer_residual_min,
@@ -845,6 +859,12 @@ class ImageDenoiserModelV4(nn.Module):
                             dims=dims,
                             use_scale_shift_norm=use_scale_shift_norm,
                             up=True,
+                        ) if resblock_updown else
+                        Upsample(
+                            ch,
+                            conv_resample,
+                            dims=dims, 
+                            out_channels=out_ch,
                         )
                     )
                     ds //= 2

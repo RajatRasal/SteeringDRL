@@ -293,7 +293,8 @@ def main():
         )
 
     lr = opt_config['lr'] if args.lr is None else args.lr
-    groups = inner_model.param_groups(lr)
+    dec_lr = 2 * lr
+    groups = inner_model.param_groups(dec_lr)
     groups.append({'params': encoder.parameters(), 'lr': lr})
     if opt_config['type'] == 'adamw':
         opt = optim.AdamW(
@@ -339,6 +340,15 @@ def main():
         )
     elif sched_config['type'] == 'constant':
         sched = K.utils.ConstantLRWithWarmup(opt, warmup=sched_config['warmup'])
+    elif sched_config['type'] == 'cosine':
+        total_steps = args.end_nimgs // args.batch_size
+        sched = K.utils.CosineAnnealingWarmupRestarts(
+            opt,
+            total_steps,
+            max_lr=(dec_lr, dec_lr, lr),
+            min_lr=0.,
+            warmup_steps=int(total_steps * sched_config['warmup_pct']),
+        )
     else:
         raise ValueError('Invalid schedule type')
 
@@ -349,14 +359,50 @@ def main():
     )
     ema_stats = {}
 
-    dataset_obj = named_data.get_named_ground_truth_data(dataset_config['type'])
+    if dataset_config['type'] in ["shapes3d", "cars3d", "mpi3d"]:
+        dataset_obj = named_data.get_named_ground_truth_data(dataset_config['type'])
+    else:
+        from itertools import cycle
+        from data.ocl.datasets import build_dataset
+        data_root = {
+            'clevrtex': './datasets/CLEVRTex',
+            'voc': './datasets/VOC',
+        }
+        params = dict(
+            dataset=dataset_config['type'],
+            data_root=data_root[config['dataset']['type']],
+            resolution=(128, 128) if config['dataset']['type'] == 'clevrtex' else (224, 224),
+            load_mask=True,
+            load_anno=True,
+        )
+        datasets = build_dataset(params)
+        train_set, val_set = datasets[0], datasets[1]
+        val_set.load_sem_mask = True
+        collate_fn = datasets[2] if len(datasets) == 3 else None
+        dl_train = DataLoader(
+            train_set,
+            batch_size=args.batch_size,
+            collate_fn=collate_fn,
+            num_workers=0,
+            shuffle=True,
+            drop_last=True,
+        )
+        dl_train = cycle(dl_train)
+        # dl_eval = DataLoader(
+        #     val_set,
+        #     batch_size=args.batch_size,
+        #     collate_fn=collate_fn,
+        #     num_workers=0,
+        #     shuffle=False,
+        #     drop_last=True,
+        # ) 
 
     with torch.no_grad(), K.models.flops.flop_counter() as fc:
         x = torch.zeros([1, model_config['input_channels'], size[0] * 4, size[1] * 4], device=device)
-        labels = torch.zeros([1, dataset_obj.num_factors], device=device)
-        if encoder_config['type'].startswith('image_'):
+        if encoder_config['type'].startswith('image_') or encoder_config['type'] == 'slot':
             conds = encoder(x)
         elif encoder_config['type'] == 'label':
+            labels = torch.zeros([1, dataset_obj.num_factors], device=device)
             conds = encoder(labels)
         else:
             raise NotImplementedError()
@@ -420,10 +466,11 @@ def main():
     metrics_log = None
     if evaluate_enabled:
         extractor = lpips.LPIPS(net='vgg').to(device).to(torch.float32)
-        metrics_log = K.utils.CSVLogger(
-            str(run_dir / 'metrics.csv'),
-            ['nimgs', 'time', 'loss', 'mse', 'lpips', 'dci', 'factorvae', 'mig', 'betavae', 'importance_sim'],
-        )
+        if encoder_config['type'] == 'slot':
+            metrics = ['nimgs', 'time', 'loss', 'mse', 'lpips', 'ari', 'fari', 'miou', 'fmiou', 'mbo', 'importance_sim']
+        else:
+            metrics = ['nimgs', 'time', 'loss', 'mse', 'lpips', 'dci', 'factorvae', 'mig', 'betavae', 'importance_sim']
+        metrics_log = K.utils.CSVLogger(str(run_dir / 'metrics.csv'), metrics)
 
     debug_log_enabled = args.debug_log_every > 0
     debug_log = None
@@ -456,11 +503,22 @@ def main():
     def demo():
         tqdm.write('Sampling...')
 
-        labels, images = dataset_obj.sample(args.sample_n, np.random.RandomState(0))
-        images = K.utils.normalise(torch.tensor(images).to(torch.float32).to(device).permute(0, 3, 1, 2))
-        labels = torch.tensor(labels).to(torch.float32).to(device)
+        if dataset_config['type'] in ["shapes3d", "cars3d", "mpi3d"]:
+            labels, images = dataset_obj.sample(args.sample_n, np.random.RandomState(0))
+            images = K.utils.normalise(torch.tensor(images).to(device).to(torch.float32).permute(0, 3, 1, 2))
+            labels = torch.tensor(labels).to(device).to(torch.float32)
+        else:
+            dl_eval = DataLoader(
+                val_set,
+                batch_size=args.sample_n,
+                collate_fn=collate_fn,
+                num_workers=0,
+                shuffle=False,
+                drop_last=True,
+            ) 
+            images = next(iter(dl_eval))["img"].to(device).to(torch.float32)
 
-        if encoder_config['type'].startswith('image_'):
+        if encoder_config['type'].startswith('image_') or encoder_config['type'] == 'slot':
             conds = encoder_ema(images)
         elif encoder_config['type'] == 'label':
             conds = encoder_ema(labels)
@@ -503,11 +561,14 @@ def main():
         ######################
 
         tgt_image = images[-1].unsqueeze(0)
-        tgt_label = labels[-1].unsqueeze(0)
         if encoder_config['type'].startswith('image_'):
             src_conds = encoder_ema.encoding(images)
             tgt_conds = encoder_ema.encoding(tgt_image)
+        elif encoder_config['type'] == 'slot':
+            src_conds = encoder_ema(images)
+            tgt_conds = encoder_ema(tgt_image)
         elif encoder_config['type'] == 'label':
+            tgt_label = labels[-1].unsqueeze(0)
             src_conds = labels
             tgt_conds = tgt_label
 
@@ -561,11 +622,13 @@ def main():
 
         tqdm.write('Evaluating...')
 
-        labels, images = dataset_obj.sample(10000, np.random.RandomState(0))
-        images_ds = TensorDataset(torch.tensor(images).to(torch.float32))
-        labels_ds = TensorDataset(torch.tensor(labels).to(torch.float32))
-        ds = StackDataset(image=images_ds, label=labels_ds)
-
+        if dataset_config['type'] in ['shapes3d', 'cars3d', 'mpi3d']:
+            labels, images = dataset_obj.sample(10000, np.random.RandomState(0))
+            images_ds = TensorDataset(torch.tensor(images).to(torch.float32))
+            labels_ds = TensorDataset(torch.tensor(labels).to(torch.float32))
+            ds = StackDataset(image=images_ds, label=labels_ds)
+        else:
+            ds = val_set
         dl = DataLoader(
             dataset=ds,
             batch_size=args.batch_size,
@@ -578,10 +641,13 @@ def main():
         lpips = 0
 
         for data in tqdm(dl, total=len(dl)):
-            imgs = K.utils.normalise(data['image'][0].to(device).permute(0, 3, 1, 2))
-            labels = data['label'][0].to(device)
+            if dataset_config['type'] in ['shapes3d', 'cars3d', 'mpi3d']: 
+                imgs = K.utils.normalise(data['image'][0].to(device).permute(0, 3, 1, 2))
+                labels = data['label'][0].to(device)
+            else:
+                imgs = data['img'].to(torch.float32).to(device)
 
-            if encoder_config['type'].startswith('image_'):
+            if encoder_config['type'].startswith('image_') or encoder_config['type'] == 'slot':
                 conds = encoder_ema(imgs)
             elif encoder_config['type'] == 'label':
                 conds = encoder_ema(labels)
@@ -609,6 +675,13 @@ def main():
         lpips = lpips / len(dl)
         tqdm.write(f'MSE: {mse.item():g}, LPIPS: {lpips.item():g}')
 
+        importance_sim = importance_monitor.similarity()
+        importance_monitor.plot(
+            normalise_max=True,
+            filename=str(images_dir / f'{args.name}_importance_sim_{nimgs:08}.png')
+        )
+        importance_monitor.reset()
+
         if encoder_config['type'].startswith('image_'):
             dis_metrics = K.evaluation.evaluate_disentanglement(
                 encoder_ema,
@@ -619,22 +692,20 @@ def main():
                 True,
                 device,
             )
-            dci = dis_metrics['dci_score']['disentanglement']
-            factorvae = dis_metrics['factor_VAE_score']['eval_accuracy']
+            dci = dis_metrics['DCI']['disentanglement']
+            factorvae = dis_metrics['FactorVAE']['eval_accuracy']
             mig = dis_metrics['MIG']['discrete_mig']
-            betavae = dis_metrics['beta_vae_score']['eval_accuracy']
+            betavae = dis_metrics['BetaVAE']['eval_accuracy']
+            dis_metrics = {
+                "DCI": dci, "FactorVAE": factorvae, "MIG": mig, "BetaVAE": betavae
+            }
+        elif encoder_config['type'] == 'slot':
+            dis_metrics = K.evaluation.evaluate_segmentation(encoder_ema, dl)
         else:
             dci = 0
             factorvae = 0
             mig = 0
             betavae = 0
-
-        importance_sim = importance_monitor.similarity()
-        importance_monitor.plot(
-            normalise_max=True,
-            filename=str(images_dir / f'{args.name}_importance_sim_{nimgs:08}.png')
-        )
-        importance_monitor.reset()
 
         metrics_log.write(
             nimgs,
@@ -642,10 +713,7 @@ def main():
             ema_stats.get('loss', 0),
             mse.item(),
             lpips.item(),
-            dci,
-            factorvae,
-            mig,
-            betavae,
+            *dis_metrics.values(),
             importance_sim,
         )
         if use_wandb:
@@ -653,11 +721,8 @@ def main():
                 {
                     'MSE': mse.item(),
                     'LPIPS': lpips.item(),
-                    'DCI': dci,
-                    'FactorVAE': factorvae,
-                    'MIG': mig,
-                    'BetaVAE': betavae,
                     'ImportanceSimilarity': importance_sim,
+                    **dis_metrics,
                 },
                 step=nimgs,
             )
@@ -726,12 +791,12 @@ def main():
 
     try:
         while True:
-            factors, reals = dataset_obj.sample(args.batch_size, np.random.RandomState(nimgs))
-            reals = K.utils.normalise(torch.tensor(reals).to(device).to(torch.float32).permute(0, 3, 1, 2))
-            factors = torch.tensor(factors).to(device).to(torch.float32)
-
-            factors = factors.to(device)
-            reals = reals.to(device)
+            if dataset_config['type'] in ["shapes3d", "cars3d", "mpi3d"]:
+                factors, reals = dataset_obj.sample(args.batch_size, np.random.RandomState(nimgs))
+                reals = K.utils.normalise(torch.tensor(reals).to(device).to(torch.float32).permute(0, 3, 1, 2))
+                factors = torch.tensor(factors).to(device).to(torch.float32)
+            else:
+                reals = next(dl_train)["img"].to(device).to(torch.float32)
 
             if device.type == 'cuda':
                 start_timer = torch.cuda.Event(enable_timing=True)
@@ -742,7 +807,7 @@ def main():
                 start_timer = time.time()
 
             with K.models.checkpointing(args.checkpointing):
-                if encoder_config['type'].startswith('image_'):
+                if encoder_config['type'].startswith('image_') or encoder_config['type'] == 'slot':
                     conds = encoder(reals)
                 elif encoder_config['type'] == 'label':
                     conds = encoder(factors)
@@ -815,10 +880,12 @@ def main():
 
             nimgs += args.batch_size
 
-            if (nimgs // args.batch_size) % args.demo_every == 0:
+            step = nimgs // args.batch_size
+
+            if step == 50 or (step % args.demo_every == 0):
                 demo()
 
-            if debug_log_enabled and nimgs > 0 and (nimgs // args.batch_size) % args.debug_log_every == 0:
+            if debug_log_enabled and nimgs > 0 and step % args.debug_log_every == 0:
                 log_dict = grad_logger.make_log_dict(step=nimgs)
                 debug_log.write(
                     log_dict['step'],
@@ -839,10 +906,7 @@ def main():
                     log_dict['grads/ca_ema'],
                 )
 
-            step = nimgs // args.batch_size
-
             if evaluate_enabled and nimgs > 0:
-                # if step == 50 or (step <= 30000 and step % 250 == 0) or (step % args.evaluate_every == 0):
                 if step == 50 or (step % args.evaluate_every == 0):
                     evaluate()
 
