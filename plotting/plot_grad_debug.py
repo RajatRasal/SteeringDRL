@@ -342,7 +342,7 @@ def plot_gradients_global(
 
 if __name__ == "__main__":
     # base_dir="ckpts/vdmpp_deep/shapes3d/",
-    base_dir="ckpts/vdmpp_deep_longer_stable/shapes3d/"
+    base_dir="ckpts/vdmpp_deep_longer_stable2_improved/shapes3d/"
     plot_gradients_global(
         base_dir=base_dir,
         out_dir="analysis_plots/grad_debug",

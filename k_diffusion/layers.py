@@ -475,3 +475,17 @@ class UNet(ConditionedModule):
             input = block(input, cond, skip if i > 0 else None)
         return input
 
+
+# Activations
+
+class Erf(nn.Module):
+
+    def forward(self, x):
+        return torch.special.erf(x)
+
+
+class Atan(nn.Module):
+
+    def forward(self, x):
+        return torch.atan(x)
+

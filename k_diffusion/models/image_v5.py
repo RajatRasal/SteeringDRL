@@ -3,7 +3,7 @@ import torch.nn as nn
 
 from k_diffusion.models.image_v2 import MappingNet
 from k_diffusion import utils
-from k_diffusion.layers import FourierFeatures
+from k_diffusion.layers import FourierFeatures, Erf, Atan
 from k_diffusion.models.image_v4 import (
     Downsample,
     Upsample,
@@ -14,18 +14,6 @@ from k_diffusion.models.image_v4 import (
     zero_module,
     conv_nd,
 )
-
-
-class Erf(nn.Module):
-
-    def forward(self, x):
-        return th.special.erf(x)
-
-
-class Atan(nn.Module):
-
-    def forward(self, x):
-        return th.atan(x)
 
 
 class ImageDenoiserModelV5(nn.Module):
@@ -63,6 +51,7 @@ class ImageDenoiserModelV5(nn.Module):
         channel_mult=(1, 2, 4, 8),
         dims=2,
         num_heads=8,
+        num_head_channels=None,
         use_scale_shift_norm=False,
         resblock_updown=True,
         conv_resample=False,
@@ -70,16 +59,21 @@ class ImageDenoiserModelV5(nn.Module):
         context_dim=None,
         norm_style=None,
         norm_ctx=False,
-        skip_scale="default",
-        kappa=0.5,
         skip_residual_init=None,
         skip_residual_constraint="identity",
         skip_residual_scale=1.,
-        transformer_learned_residual=False,
-        transformer_residual_scale=1.,
+        trans_residual_init=None,
+        trans_residual_constraint="identity",
+        trans_residual_scale=1.,
     ):
         super().__init__()
         assert context_dim is not None, 'Include the dimension of cross-attention conditioning'
+
+        if num_heads is None:
+            assert num_head_channels is not None, 'Either num_heads or num_head_channels has to be set'
+
+        if num_head_channels is None:
+            assert num_heads is not None, 'Either num_heads or num_head_channels has to be set'
 
         self.in_channels = in_channels
         self.model_channels = model_channels
@@ -89,8 +83,7 @@ class ImageDenoiserModelV5(nn.Module):
         self.dropout = dropout
         self.channel_mult = channel_mult
         self.num_heads = num_heads
-        self.skip_scale = skip_scale
-        self.kappa = kappa
+        self.num_head_channels = num_head_channels
         self.skip_residual_init = skip_residual_init
 
         time_embed_dim = model_channels * 4
@@ -121,7 +114,11 @@ class ImageDenoiserModelV5(nn.Module):
                 )
                 ch = mult * model_channels
                 if ds in attention_resolutions:
-                    dim_head = ch // num_heads
+                    if num_head_channels is None:
+                        dim_head = ch // num_heads
+                    else:
+                        num_heads = ch // num_head_channels
+                        dim_head = num_head_channels
                     layers.append(
                         SpatialTransformer(
                             ch,
@@ -132,8 +129,9 @@ class ImageDenoiserModelV5(nn.Module):
                             norm_style=norm_style,
                             norm_ctx=norm_ctx,
                             adaln_ctx_dim=time_embed_dim,
-                            learned_residual=transformer_learned_residual,
-                            residual_scale=transformer_residual_scale,
+                            residual_init=trans_residual_init,
+                            residual_constraint=trans_residual_constraint,
+                            residual_scale=trans_residual_scale,
                         )
                     )
             self.enc_blocks[str(level)] = TimestepEmbedSequential(*layers)
@@ -161,7 +159,11 @@ class ImageDenoiserModelV5(nn.Module):
             else:
                 self.down_blocks[str(level)] = TimestepEmbedSequential(nn.Identity())
 
-        dim_head = ch // num_heads
+        if num_head_channels is None:
+            dim_head = ch // num_heads
+        else:
+            num_heads = ch // num_head_channels
+            dim_head = num_head_channels
         self.middle_block = TimestepEmbedSequential(
             ResBlock(
                 ch,
@@ -179,8 +181,9 @@ class ImageDenoiserModelV5(nn.Module):
                 norm_style=norm_style,
                 norm_ctx=norm_ctx,
                 adaln_ctx_dim=time_embed_dim,
-                learned_residual=transformer_learned_residual,
-                residual_scale=transformer_residual_scale,
+                residual_init=trans_residual_init,
+                residual_constraint=trans_residual_constraint,
+                residual_scale=trans_residual_scale,
             ),
             ResBlock(
                 ch,
@@ -209,7 +212,11 @@ class ImageDenoiserModelV5(nn.Module):
                 )
                 ch = model_channels * mult
                 if ds in attention_resolutions:
-                    dim_head = ch // num_heads
+                    if num_head_channels is None:
+                        dim_head = ch // num_heads
+                    else:
+                        num_heads = ch // num_head_channels
+                        dim_head = num_head_channels
                     layers.append(
                         SpatialTransformer(
                             ch,
@@ -220,8 +227,9 @@ class ImageDenoiserModelV5(nn.Module):
                             norm_style=norm_style,
                             norm_ctx=norm_ctx,
                             adaln_ctx_dim=time_embed_dim,
-                            learned_residual=transformer_learned_residual,
-                            residual_scale=transformer_residual_scale,
+                            residual_init=trans_residual_init,
+                            residual_constraint=trans_residual_constraint,
+                            residual_scale=trans_residual_scale,
                         )
                     )
             self.dec_blocks[str(level)] = TimestepEmbedSequential(*layers)
@@ -310,7 +318,6 @@ class ImageDenoiserModelV5(nn.Module):
         :return: an [N x C x ...] Tensor of outputs.
         """
         b = x.shape[0]
-        hs = []
 
         t_emb = self.timestep_embed(utils.append_dims(timesteps, 2))
         emb = self.time_embed(t_emb)

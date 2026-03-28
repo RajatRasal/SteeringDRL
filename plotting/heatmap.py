@@ -5,8 +5,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-base_dir = "ckpts/vdmpp/shapes3d_early_stage_sech"
-nimgs_target = 2944000   # training point of interest
+# base_dir = "ckpts/vdmpp/shapes3d_early_stage_sech"
+base_dir = "ckpts/vdmpp_deep_longer_stable2_improved/shapes3d/"
+nimgs_target = 768000   # training point of interest
 
 metrics = ["dci", "factorvae", "mig", "mse", "lpips"]
 recon_metrics = {"mse", "lpips"}   # lower is better → use reversed colormap
@@ -45,8 +46,9 @@ for run_dir in os.listdir(base_dir):
     if (df["nimgs"] == nimgs_target).any():
         row = df.loc[df["nimgs"] == nimgs_target].iloc[0]
     else:
-        idx = (df["nimgs"] - nimgs_target).abs().argmin()
-        row = df.iloc[idx]
+        continue
+        # idx = (df["nimgs"] - nimgs_target).abs().argmin()
+        # row = df.iloc[idx]
 
     key = (model_seed, time_seed)
     rows[key] = row

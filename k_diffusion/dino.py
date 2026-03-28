@@ -14,7 +14,8 @@ def dino(patch_size: int, small_size: bool = True):
     else:
         raise ValueError(f'patch_size {patch_size} not supported')
     model = DINOEncoder(
-        resolution=resolution, patch_size=patch_size, small_size=small_size)
+        resolution=resolution, patch_size=patch_size, small_size=small_size,
+    )
     return model
 
 
@@ -38,7 +39,8 @@ class DINOEncoder(nn.Module):
             self.version = 'b'
 
         self.dino = ViTModel.from_pretrained(
-            f'facebook/dino-vit{self.version}{patch_size}')
+            f'facebook/dino-vit{self.version}{patch_size}'
+        )
         for p in self.dino.parameters():
             p.requires_grad = False
 

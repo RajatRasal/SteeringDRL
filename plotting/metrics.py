@@ -13,11 +13,34 @@ import seaborn as sns
 # ----------------------------------------------------
 # ROOT = "ckpts/vdmpp/shapes3d_low_discrep..."
 # ROOT = "ckpts/vdmpp/shapes3d_early_stage/..."
-# ROOT = "ckpts/vdmpp_deep/shapes3d/"
 # ROOT = "ckpts/vdmpp_deep_longer_stable/shapes3d/"
-ROOT = "ckpts/vdmpp_deep_longer_stable2/shapes3d/"
+# ROOT = "ckpts/vdmpp_deep_longer_stable2/shapes3d/"
+# ROOT = "ckpts/vdmpp_deep_longer/shapes3d/"
 
-METRICS = ["dci", "factorvae", "mig", "mse", "lpips"]
+# ROOT = "ckpts/vdmpp_deep_longer/shapes3d/"
+# ROOT = "ckpts/vdmpp_deep_longer_stable/shapes3d"
+# ROOT = "ckpts/vdmpp_deep_longer_stable/shapes3d"
+# ROOT = "ckpts/vdmpp_deep/shapes3d"
+# ROOT = "ckpts/vdmpp_deep_longer_stable2_improved/shapes3d/"
+# ROOT = "ckpts/ocl-test"
+# ROOT = "ckpts/final/voc"
+# ROOT = "ckpts/final/coco"
+# ROOT = "ckpts/final/shapes3d"
+# ROOT = "ckpts/final/cars3d"
+# ROOT = "ckpts/final/mpi3d"
+
+# ROOT = "ckpts/final2/shapes3d"
+# ROOT = "ckpts/final2/mpi3d"
+# ROOT = "ckpts/final2/cars3d"
+
+# ROOT = "ckpts/paper/shapes3d"
+# ROOT = "ckpts/paper/cars3d"
+ROOT = "ckpts/paper/mpi3d"
+
+METRICS = ["dci", "factorvae", "mig", "lpips"]
+# METRICS = ["ari", "fari", "miou", "mbo", "lpips"] # "mse", "lpips"]
+# METRICS = ["fari", "miou", "mbo", "lpips"] # "mse", "lpips"]
+# METRICS = ["ari", "fari", "miou", "mbo", "smbo", "lpips"] # "mse", "lpips"]
 
 SAVE_FIGS = True
 OUTDIR = "analysis_plots"
@@ -52,13 +75,18 @@ curves = defaultdict(list)   # full curves per run (nimgs + metrics)
 
 for folder in os.listdir(ROOT):
     folder_path = os.path.join(ROOT, folder)
-    if not os.path.isdir(folder_path):
+    # if not os.path.isdir(folder_path) or "skip_res1" not in folder_path:
+    if not os.path.isdir(folder_path): #  or "skip_res1" not in folder_path:
         continue
 
     # expect folder names like "0shapes3d_v_cosine_sech"
     try:
+        # seed = int(folder[0])
+        # model_setting = int(folder[-1])
         seed = int(folder[:2])
         model_setting = folder[2:]
+        # seed = int(folder[:1])
+        # model_setting = folder[1:]
     except Exception:
         # skip folders not matching the pattern
         continue
@@ -76,6 +104,10 @@ for folder in os.listdir(ROOT):
     except Exception as e:
         print(f"Skipping {folder}, failed to read metrics.csv: {e}")
         continue
+
+    if ROOT.endswith("voc") or ROOT.endswith("coco"):
+        df.reset_index(inplace=True)
+        df.columns = ["nimgs","time",'loss','mse','lpips','ari','fari','miou','fmiou','mbo','sari','sfari','smiou','sfmiou','smbo','importance_sim']
 
     # store final values robustly (handles empty cols / NaNs)
     entry = {}
@@ -132,7 +164,7 @@ model_order = sorted(
 # consistent palette: one colour per model
 palette = dict(zip(model_order, sns.color_palette(n_colors=len(model_order))))
 
-fig, axes = plt.subplots(1, n_metrics, figsize=(4.6 * n_metrics, 8), squeeze=False)
+fig, axes = plt.subplots(1, n_metrics, figsize=(4.6 * n_metrics, 15), squeeze=False)
 axes = axes[0]
 
 for idx, (metric, data) in enumerate(zip(valid_metrics, metric_data_list)):
@@ -281,6 +313,12 @@ for model, vals in summary.items():
     print(f"\n{model}:")
     for m, list_vals in vals.items():
         if list_vals:
-            print(f"  {m}: mean={sum(list_vals)/len(list_vals):.4f}, n={len(list_vals)}")
+            print(f"  {m}: mean={sum(list_vals)/len(list_vals):.4f}, std={np.array(list_vals).std():.4f}, n={len(list_vals)}, max={max(list_vals):.4f}")
         else:
             print(f"  {m}: no data")
+
+for model, vals in summary.items():
+    print(f"& {model}", end=" ")
+    for m, list_vals in vals.items():
+        print(f"& ${sum(list_vals)/len(list_vals):.4f} \pm {np.array(list_vals).std():.4f}$", end=" ")
+    print(r"\\")

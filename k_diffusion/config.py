@@ -1,4 +1,5 @@
 from functools import partial
+import os
 import json
 import math
 import pickle
@@ -11,7 +12,7 @@ from torch.distributions import Normal
 
 from . import augmentation, layers, models, utils, external, external2
 from data.ground_truth import named_data
-from vqvae.VQVAE import VQVAE
+from vqvae.VQVAE import VQVAE, VQVAEWrapper
 
 
 def round_to_power_of_two(x, tol):
@@ -213,8 +214,8 @@ def make_model(config):
             learned_subsampling=config['learned_subsampling'],
             up_down_asymmetry=config['up_down_asymmetry'],
             use_mid_block=config['use_mid_block'],
-            rezero=config['rezero'],
-            init_res_scale=config['init_res_scale'],
+            rezero=config.get('rezero', False),
+            init_res_scale=config.get('init_res_scale', 1.0),
         )
         if config['augment_wrapper']:
             model = augmentation.KarrasAugmentWrapper(model)
@@ -228,7 +229,8 @@ def make_model(config):
             attention_resolutions=config['attention_resolutions'],
             channel_mult=config['channel_mult'],
             dropout=config['dropout'],
-            num_heads=config['num_heads'],
+            num_heads=config.get('num_heads', None),
+            num_head_channels=config.get('num_head_channels', None),
             use_scale_shift_norm=config['use_scale_shift_norm'],
             resblock_updown=config.get('resblock_updown', True),
             conv_resample=config.get('conv_resample', False),
@@ -240,9 +242,10 @@ def make_model(config):
             skip_scale=config.get('skip_scale', 'default'),
             kappa=config.get('kappa', 1.0),
             skip_dropout_rate=config.get('skip_dropout_rate', 0),
-            skip_drop_resolutions=config.get('skip_drop_resolutions', [1, 2, 4]),
-            transformer_learned_residual=config.get('transformer_learned_residual', False),
-            transformer_residual_scale=config.get('transformer_residual_scale', 1.),
+            skip_drop_resolutions=config.get('skip_drop_resolutions', []),
+            trans_residual_init=config.get('trans_residual_init', None),
+            trans_residual_constraint=config.get('trans_residual_constraint', 'identity'),
+            trans_residual_scale=config.get('trans_residual_scale', 1.),
         )
     elif config['type'] == 'image_v5':
         model = models.ImageDenoiserModelV5(
@@ -253,7 +256,34 @@ def make_model(config):
             attention_resolutions=config['attention_resolutions'],
             channel_mult=config['channel_mult'],
             dropout=config['dropout'],
-            num_heads=config['num_heads'],
+            num_heads=config.get('num_heads', None),
+            num_head_channels=config.get('num_head_channels', None),
+            use_scale_shift_norm=config['use_scale_shift_norm'],
+            resblock_updown=config.get('resblock_updown', True),
+            conv_resample=config.get('conv_resample', False),
+            transformer_depth=config['transformer_depth'],
+            latent_unit=config['latent_units'],
+            context_dim=config['context_dim'],
+            norm_style=config.get('norm_style', False),
+            norm_ctx=config.get('norm_ctx', False),
+            skip_residual_init=config.get('skip_residual_init', None),
+            skip_residual_constraint=config.get('skip_residual_constraint', 'identity'),
+            skip_residual_scale=config.get('skip_residual_scale', 1.),
+            trans_residual_init=config.get('trans_residual_init', None),
+            trans_residual_constraint=config.get('trans_residual_constraint', 'identity'),
+            trans_residual_scale=config.get('trans_residual_scale', 1.),
+        )
+    elif config['type'] == 'image_v6':
+        model = models.ImageDenoiserModelV6(
+            in_channels=config['input_channels'],
+            out_channels=config['out_channels'],
+            model_channels=config['model_channels'],
+            num_res_blocks=config['num_res_blocks'],
+            attention_resolutions=config['attention_resolutions'],
+            channel_mult=config['channel_mult'],
+            dropout=config['dropout'],
+            num_heads=config.get('num_heads', None),
+            num_head_channels=config.get('num_head_channels', None),
             use_scale_shift_norm=config['use_scale_shift_norm'],
             resblock_updown=config.get('resblock_updown', True),
             conv_resample=config.get('conv_resample', False),
@@ -267,9 +297,10 @@ def make_model(config):
             skip_residual_init=config.get('skip_residual_init', None),
             skip_residual_constraint=config.get('skip_residual_constraint', 'identity'),
             skip_residual_scale=config.get('skip_residual_scale', 1.),
-            transformer_learned_residual=config.get('transformer_learned_residual', False),
-            transformer_residual_scale=config.get('transformer_residual_scale', 1.),
-        )
+            trans_residual_init=config.get('trans_residual_init', None),
+            trans_residual_constraint=config.get('trans_residual_constraint', 'identity'),
+            trans_residual_scale=config.get('trans_residual_scale', 1.),
+        ) 
     elif config['type'] == 'image_transformer_v1':
         model = models.ImageTransformerDenoiserModelV1(
             n_layers=config['depth'],
@@ -369,9 +400,14 @@ def make_encoder(config):
 
 
 VQVAE_CKPT_PATHS = {
-    'shapes3d': 'ckpts/vqvae/2_shapes3d_True_32_128_5e-05/training-state-030000.pkl',
-    'mpi3d': 'ckpts/vqvae/0_mpi3d_True_32_128_5e-05/training-state-030000.pkl',
-    'cars3d': 'ckpts/vqvae/0_cars3d_True_32_128_5e-05/training-state-030000.pkl',
+    # 'shapes3d': 'ckpts/vqvae/2_shapes3d_True_32_128_5e-05/training-state-030000.pkl',
+    # 'mpi3d': 'ckpts/vqvae/0_mpi3d_True_32_128_5e-05/training-state-030000.pkl',
+    # 'cars3d': 'ckpts/vqvae/0_cars3d_True_32_128_5e-05/training-state-030000.pkl',
+
+    'shapes3d': 'ckpts/vqvae/0_shapes3d_True_32_128_5e-05_new/training-state-150000.pkl',
+    'mpi3d': 'ckpts/vqvae/0_mpi3d_True_32_128_5e-05_new/training-state-150000.pkl',
+    'cars3d': 'ckpts/vqvae/0_cars3d_True_32_128_5e-05_new/training-state-150000.pkl',
+
     'clevrtex': 'ckpts/vqvae/clevrtex/vqvae_clevrtex_params-res128.pth',
     'coco': 'ckpts/vqvae/coco/vqvae_coco_params-res224.pth',
     'voc': 'ckpts/vqvae/voc/vqvae_voc_params-res224.pth',
@@ -406,6 +442,15 @@ def make_vqvae(config):
             ),
         )
         vqvae.load_state_dict(ckpt, strict=True)
+    if 'vqvae_scale_factor' in config['dataset']:
+        if config['dataset']['vqvae_scale_factor']:
+            scale_factor = torch.load(os.path.join(os.path.dirname(path), "std.pt"))
+        else:
+            scale_factor = 1.0
+    else:
+        scale_factor = 1.0
+    print(f"Scale Factor: {scale_factor}")
+    vqvae = VQVAEWrapper(vqvae, scale_factor)
     return vqvae
 
 def make_denoiser_wrapper(config):

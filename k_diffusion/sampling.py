@@ -774,14 +774,13 @@ def sample_ddim_lambda(model, noise, noise_schedule, steps, eta=1.0, clamp=False
         alpha_s = utils.append_dims(alpha_s, x_t.ndim)
         sigma_s = utils.append_dims(sigma_s, x_t.ndim)
 
-        # x0 prediction
+        # x0, eps prediction
         x0 = model.to_x(model_out, x_t, sigma_t, alpha_t)
+        eps = model.to_eps(model_out, x_t, sigma_t, alpha_t)
         if clamp:
             x0 = x0.clamp(-1, 1)
 
-        # infer eps from x_t and x0
-        eps = (x_t - alpha_t * x0) / (sigma_t + 1e-12)
-
+        # Note: Below is an exact implementation of the DDIM paper (Equation 12).
         if eta == 0.0:
             # DDIM (deterministic): x_s = alpha_s x0 + sigma_s eps
             return alpha_s * x0 + sigma_s * eps
@@ -791,12 +790,11 @@ def sample_ddim_lambda(model, noise, noise_schedule, steps, eta=1.0, clamp=False
         a_s = alpha_s ** 2
 
         # sigma_eta = eta * sqrt((1-a_s)/(1-a_t)) * sqrt(1 - a_t/a_s)
-        sigma_eta = eta * torch.sqrt((1 - a_s) / (1 - a_t + 1e-12)) * torch.sqrt(
-            torch.clamp(1 - (a_t / (a_s + 1e-12)), min=0.0)
-        )
+        sigma_eta = eta * torch.sqrt((1 - a_s) / (1 - a_t + 1e-12)) \
+            * torch.sqrt(torch.clamp(1 - (a_t / (a_s + 1e-12)), min=0.0))
 
         # eps coeff so that total variance matches: 1 - a_s = eps_coeff^2 + sigma_eta^2
-        eps_coeff = torch.sqrt(torch.clamp(1 - a_s - sigma_eta**2, min=0.0))
+        eps_coeff = torch.sqrt(torch.clamp(1 - a_s - sigma_eta ** 2, min=0.0))
 
         z = torch.randn_like(x_t)
         return alpha_s * x0 + eps_coeff * eps + sigma_eta * z

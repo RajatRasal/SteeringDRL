@@ -146,30 +146,38 @@ class VQVAE(nn.Module):
 class VQVAEWrapper(nn.Module):
     """A wrapper for LDM with VQVAE."""
 
-    def __init__(self, enc_dec_dict, vq_dict, vqvae_ckp_path, scale_factor=1.):
+    # def __init__(self, enc_dec_dict, vq_dict, vqvae_ckp_path, scale_factor_path=None):
+    def __init__(self, vqvae, scale_factor=1.0):
         super().__init__()
 
-        self.vqvae = VQVAE(
-            enc_dec_dict=enc_dec_dict,
-            vq_dict=vq_dict,
-            use_loss=False,
-        ).eval()
-        # load pre-trained weight
-        if os.path.exists(vqvae_ckp_path):
-            ckp = torch.load(vqvae_ckp_path, map_location='cpu')
-            if 'state_dict' in ckp:
-                ckp = ckp['state_dict']
-            # remove 'loss.' keys
-            ckp = {k: v for k, v in ckp.items() if not k.startswith('loss.')}
-            self.vqvae.load_state_dict(ckp)
-        else:
-            print(f'Warning: VQ-VAE weight not found at {vqvae_ckp_path}!!!')
-        # freeze the VQVAE
-        for p in self.vqvae.parameters():
-            p.requires_grad = False
+        self.vqvae = vqvae
+        self.scale_factor = scale_factor
+
+        # self.vqvae = VQVAE(
+        #     enc_dec_dict=enc_dec_dict,
+        #     vq_dict=vq_dict,
+        #     use_loss=False,
+        # ).eval()
+        # # load pre-trained weight
+        # if os.path.exists(vqvae_ckp_path):
+        #     ckp = torch.load(vqvae_ckp_path, map_location='cpu')
+        #     if 'state_dict' in ckp:
+        #         ckp = ckp['state_dict']
+        #     # remove 'loss.' keys
+        #     ckp = {k: v for k, v in ckp.items() if not k.startswith('loss.')}
+        #     self.vqvae.load_state_dict(ckp)
+        # else:
+        #     print(f'Warning: VQ-VAE weight not found at {vqvae_ckp_path}!!!')
+        # # freeze the VQVAE
+        # for p in self.vqvae.parameters():
+        #     p.requires_grad = False
 
         # scale the Z by dividing this value
-        self.scale_factor = scale_factor
+        # if scale_factor_path is not None and os.path.exists(scale_factor_path):
+        #     self.scale_factor = torch.load(scale_factor_path)
+        # else:
+        #     self.scale_factor = 1.0
+        print(f"Using scale factor {self.scale_factor}")
 
     def encode(self, x):
         return self.vqvae.encode(x) / self.scale_factor

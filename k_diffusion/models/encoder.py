@@ -35,7 +35,7 @@ class EncResBlock(nn.Module):
 
 
 class ImageEncoder(nn.Module):
-    def __init__(self, d, context_dim, latent_unit, bn=True, num_channels=3):
+    def __init__(self, d, context_dim, latent_unit, num_channels=3):
         super().__init__()
         self.context_dim = context_dim
         self.latent_unit = latent_unit
@@ -54,9 +54,9 @@ class ImageEncoder(nn.Module):
             nn.Conv2d(d, d, kernel_size=4, stride=2, padding=1),
             nn.BatchNorm2d(d), nn.ReLU(inplace=True),
 
-            EncResBlock(d, d, bn=bn),
+            EncResBlock(d, d, norm="bn"),
             nn.BatchNorm2d(d), nn.ReLU(inplace=True),
-            EncResBlock(d, d, bn=bn),
+            EncResBlock(d, d, norm="bn"),
 
             nn.Flatten(start_dim=1),                # keeps B (e.g., 512)
             nn.Linear(d * 4 * 4, latent_unit),      # no hardcoding

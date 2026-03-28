@@ -4,7 +4,7 @@
 
 source /vol/cuda/12.9.0/setup.sh
 
-export PATH="/vol/biomedic2/rrr2417/k-diffusion/.venv/bin:/vol/biomedic3/rrr2417/.local/bin:$PATH"
+source .venv/bin/activate
 
 echo "=== Node: $(hostname) ==="
 echo "--- nvidia-smi ---"
@@ -31,12 +31,16 @@ python3 train2.py \
     --seed=$4 \
     --exp-name=$5 \
     --sample-n=16 \
-    --demo-every=5000 \
-    --evaluate-every=5000 \
+    --demo-every=2500 \
+    --evaluate-every=2500 \
     --debug-log-every=100 \
-    --save-every=1000000 \
-    --end-nimgs=5000000 \
-    --training-seed=$6
+    --save-every=50000 \
+    --end-nimgs=15000000 \
+    --training-seed=$6 \
+    --gradient-clipping \
+    --sampling-steps=50 \
+    --eta=1.0
+
 
 #     --demo-every=1000 \
 #     --evaluate-every=1000 \

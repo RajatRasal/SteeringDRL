@@ -208,6 +208,10 @@ def main():
                    help='save every this many steps')
     p.add_argument('--seed', type=int,
                    help='the random seed')
+    p.add_argument('--sampling-steps', type=int, default=50,
+                   help='number of steps used when sampling')
+    p.add_argument('--eta', type=float, default=1.0,
+                   help='determinism of sampler from 0 = DDIM to 1 = DDPM')
     p.add_argument('--training-seed', type=int,
                    help='the random seed')
     p.add_argument('--start-method', type=str, default='spawn',
@@ -267,6 +271,7 @@ def main():
     encoder = K.config.make_encoder(config).to(device)
     encoder_ema = deepcopy(encoder)
     vqvae = K.config.make_vqvae(config).to(device)
+    vqvae.scale_factor = vqvae.scale_factor.to(device)
 
     if args.compile:
         inner_model.compile()
@@ -367,6 +372,7 @@ def main():
         data_root = {
             'clevrtex': './datasets/CLEVRTex',
             'voc': './datasets/VOC',
+            'coco': './datasets/COCO',
         }
         params = dict(
             dataset=dataset_config['type'],
@@ -388,18 +394,10 @@ def main():
             drop_last=True,
         )
         dl_train = cycle(dl_train)
-        # dl_eval = DataLoader(
-        #     val_set,
-        #     batch_size=args.batch_size,
-        #     collate_fn=collate_fn,
-        #     num_workers=0,
-        #     shuffle=False,
-        #     drop_last=True,
-        # ) 
 
     with torch.no_grad(), K.models.flops.flop_counter() as fc:
         x = torch.zeros([1, model_config['input_channels'], size[0] * 4, size[1] * 4], device=device)
-        if encoder_config['type'].startswith('image_') or encoder_config['type'] == 'slot':
+        if encoder_config['type'].startswith('image') or encoder_config['type'] == 'slot':
             conds = encoder(x)
         elif encoder_config['type'] == 'label':
             labels = torch.zeros([1, dataset_obj.num_factors], device=device)
@@ -467,9 +465,9 @@ def main():
     if evaluate_enabled:
         extractor = lpips.LPIPS(net='vgg').to(device).to(torch.float32)
         if encoder_config['type'] == 'slot':
-            metrics = ['nimgs', 'time', 'loss', 'mse', 'lpips', 'ari', 'fari', 'miou', 'fmiou', 'mbo', 'importance_sim']
+            metrics = ['nimgs', 'time', 'loss', 'mse', 'lpips', 'ari', 'fari', 'miou', 'fmiou', 'mbo'] # , 'importance_sim']
         else:
-            metrics = ['nimgs', 'time', 'loss', 'mse', 'lpips', 'dci', 'factorvae', 'mig', 'betavae', 'importance_sim']
+            metrics = ['nimgs', 'time', 'loss', 'mse', 'lpips', 'dci', 'factorvae', 'mig', 'betavae'] #, 'importance_sim']
         metrics_log = K.utils.CSVLogger(str(run_dir / 'metrics.csv'), metrics)
 
     debug_log_enabled = args.debug_log_every > 0
@@ -518,7 +516,7 @@ def main():
             ) 
             images = next(iter(dl_eval))["img"].to(device).to(torch.float32)
 
-        if encoder_config['type'].startswith('image_') or encoder_config['type'] == 'slot':
+        if encoder_config['type'].startswith('image') or encoder_config['type'] == 'slot':
             conds = encoder_ema(images)
         elif encoder_config['type'] == 'label':
             conds = encoder_ema(labels)
@@ -527,8 +525,9 @@ def main():
 
         noise = torch.randn([args.sample_n, model_config['input_channels'], size[0], size[1]], generator=demo_gen).to(device)
         extra_args = {'cross_cond': conds, 'cross_cond_padding': torch.zeros_like(conds[..., 0], dtype=torch.bool)}
-        recon = K.sampling.sample_ddpm_lambda(model_ema, noise, noise_schedule, steps=50, extra_args=extra_args)
-        recon = vqvae.quantize_decode(recon).clamp(-1, 1)
+        recon = K.sampling.sample_ddim_lambda(model_ema, noise, noise_schedule, steps=args.sampling_steps, eta=args.eta, extra_args=extra_args)
+        # recon = vqvae.quantize_decode(recon).clamp(-1, 1)
+        recon = vqvae.decode(recon).clamp(-1, 1)
 
         recon_grid = utils.make_grid(
             K.utils.unnormalise(recon),
@@ -561,7 +560,7 @@ def main():
         ######################
 
         tgt_image = images[-1].unsqueeze(0)
-        if encoder_config['type'].startswith('image_'):
+        if encoder_config['type'].startswith('image'):
             src_conds = encoder_ema.encoding(images)
             tgt_conds = encoder_ema.encoding(tgt_image)
         elif encoder_config['type'] == 'slot':
@@ -576,7 +575,7 @@ def main():
         for i in range(tgt_conds.shape[1]):
             edit_conds = src_conds.clone()
             edit_conds[:, i] = tgt_conds[0, i].clone()
-            if encoder_config['type'].startswith('image_'):
+            if encoder_config['type'].startswith('image'):
                 edit_conds = encoder_ema.split_embedding(edit_conds)
             elif encoder_config['type'] == 'label':
                 edit_conds = encoder_ema(edit_conds)
@@ -586,8 +585,9 @@ def main():
         for edit_conds in edit_conds_list:
             noise = torch.randn([args.sample_n, model_config['input_channels'], size[0], size[1]], generator=demo_gen).to(device)
             extra_args = {'cross_cond': edit_conds, 'cross_cond_padding': torch.zeros_like(conds[..., 0], dtype=torch.bool)}
-            edit = K.sampling.sample_ddpm_lambda(model_ema, noise, noise_schedule, steps=50, extra_args=extra_args)
-            edit = vqvae.quantize_decode(edit).clamp(-1, 1)
+            edit = K.sampling.sample_ddim_lambda(model_ema, noise, noise_schedule, steps=args.sampling_steps, eta=args.eta, extra_args=extra_args)
+            # edit = vqvae.quantize_decode(edit).clamp(-1, 1)
+            edit = vqvae.decode(edit).clamp(-1, 1)
             edits.append(edit)
         summary_edits = [
             images,
@@ -627,15 +627,22 @@ def main():
             images_ds = TensorDataset(torch.tensor(images).to(torch.float32))
             labels_ds = TensorDataset(torch.tensor(labels).to(torch.float32))
             ds = StackDataset(image=images_ds, label=labels_ds)
+            dl = DataLoader(
+                dataset=ds,
+                batch_size=args.batch_size,
+                num_workers=0,
+                shuffle=False,
+                drop_last=True,
+            )
         else:
-            ds = val_set
-        dl = DataLoader(
-            dataset=ds,
-            batch_size=args.batch_size,
-            num_workers=0,
-            shuffle=False,
-            drop_last=True,
-        )
+            dl = DataLoader(
+                val_set,
+                batch_size=args.batch_size,
+                collate_fn=collate_fn,
+                num_workers=0,
+                shuffle=True,
+                drop_last=True,
+            )
 
         mse = 0
         lpips = 0
@@ -647,7 +654,7 @@ def main():
             else:
                 imgs = data['img'].to(torch.float32).to(device)
 
-            if encoder_config['type'].startswith('image_') or encoder_config['type'] == 'slot':
+            if encoder_config['type'].startswith('image') or encoder_config['type'] == 'slot':
                 conds = encoder_ema(imgs)
             elif encoder_config['type'] == 'label':
                 conds = encoder_ema(labels)
@@ -656,8 +663,9 @@ def main():
 
             noise = torch.randn([args.batch_size, model_config['input_channels'], size[0], size[1]], generator=demo_gen).to(device)
             extra_args = {'cross_cond': conds, 'cross_cond_padding': torch.zeros_like(conds[..., 0], dtype=torch.bool)}
-            recon = K.sampling.sample_ddpm_lambda(model_ema, noise, noise_schedule, steps=50, extra_args=extra_args)
-            recon = vqvae.quantize_decode(recon).clamp(-1, 1)
+            recon = K.sampling.sample_ddim_lambda(model_ema, noise, noise_schedule, steps=args.sampling_steps, eta=args.eta, extra_args=extra_args)
+            # recon = vqvae.quantize_decode(recon).clamp(-1, 1)
+            recon = vqvae.decode(recon).clamp(-1, 1)
 
             mse_ = K.evaluation.mse_metric(
                 K.utils.unnormalise(imgs),
@@ -675,14 +683,14 @@ def main():
         lpips = lpips / len(dl)
         tqdm.write(f'MSE: {mse.item():g}, LPIPS: {lpips.item():g}')
 
-        importance_sim = importance_monitor.similarity()
-        importance_monitor.plot(
-            normalise_max=True,
-            filename=str(images_dir / f'{args.name}_importance_sim_{nimgs:08}.png')
-        )
-        importance_monitor.reset()
+        # importance_sim = importance_monitor.similarity()
+        # importance_monitor.plot(
+        #     normalise_max=True,
+        #     filename=str(images_dir / f'{args.name}_importance_sim_{nimgs:08}.png')
+        # )
+        # importance_monitor.reset()
 
-        if encoder_config['type'].startswith('image_'):
+        if encoder_config['type'].startswith('image'):
             dis_metrics = K.evaluation.evaluate_disentanglement(
                 encoder_ema,
                 dataset_obj,
@@ -701,6 +709,7 @@ def main():
             }
         elif encoder_config['type'] == 'slot':
             dis_metrics = K.evaluation.evaluate_segmentation(encoder_ema, dl)
+            print(dis_metrics)
         else:
             dci = 0
             factorvae = 0
@@ -714,14 +723,14 @@ def main():
             mse.item(),
             lpips.item(),
             *dis_metrics.values(),
-            importance_sim,
+            # importance_sim,
         )
         if use_wandb:
             wandb.log(
                 {
                     'MSE': mse.item(),
                     'LPIPS': lpips.item(),
-                    'ImportanceSimilarity': importance_sim,
+                    # 'ImportanceSimilarity': importance_sim,
                     **dis_metrics,
                 },
                 step=nimgs,
@@ -768,14 +777,14 @@ def main():
         """
         return float((emp - target).abs().mean().item())
 
-    importance_monitor = K.external2.ImportanceWeightMonitor(
-        lambda_min=model_config['lambda_min'],
-        lambda_max=model_config['lambda_max'],
-        num_bins=20000,
-        weight_fn=weighting_fn,
-        similarity_fn=mae_similarity,
-        device=device,
-    )
+    # importance_monitor = K.external2.ImportanceWeightMonitor(
+    #     lambda_min=model_config['lambda_min'],
+    #     lambda_max=model_config['lambda_max'],
+    #     num_bins=20000,
+    #     weight_fn=weighting_fn,
+    #     similarity_fn=mae_similarity,
+    #     device=device,
+    # )
 
     def get_all_cross_attn_params(model) -> List:
         params = []
@@ -796,7 +805,7 @@ def main():
                 reals = K.utils.normalise(torch.tensor(reals).to(device).to(torch.float32).permute(0, 3, 1, 2))
                 factors = torch.tensor(factors).to(device).to(torch.float32)
             else:
-                reals = next(dl_train)["img"].to(device).to(torch.float32)
+                reals = next(dl_train)['img'].to(device).to(torch.float32)
 
             if device.type == 'cuda':
                 start_timer = torch.cuda.Event(enable_timing=True)
@@ -807,7 +816,7 @@ def main():
                 start_timer = time.time()
 
             with K.models.checkpointing(args.checkpointing):
-                if encoder_config['type'].startswith('image_') or encoder_config['type'] == 'slot':
+                if encoder_config['type'].startswith('image') or encoder_config['type'] == 'slot':
                     conds = encoder(reals)
                 elif encoder_config['type'] == 'label':
                     conds = encoder(factors)
@@ -826,7 +835,7 @@ def main():
                     weighting_fn,
                     noise_schedule,
                     training_generator,
-                    importance_monitor,
+                    None, # importance_monitor,
                     **extra_args,
                 )
 
@@ -923,3 +932,15 @@ def main():
 
 if __name__ == '__main__':
     main()
+    """
+    models = [
+    ("cosine_sech", "A"),
+    ("cosine_sigmoid_improved9_band9", "B"),
+    ("cosine_sigmoid_improved9_skip4", "C"),
+    ("cosine_sigmoid_improved9_skip5", "D"),
+    ("cosine_sigmoid_improved9_skip_res8", "E"),
+    ("cosine_sigmoid_improved9_skip_res9", "F"),
+    ("cosine_sigmoid_improved9_skip_res12_resunet3", "G"),
+    ("cosine_sigmoid_improved9_skip_res12_resunet12", "H"),
+    ]
+    """

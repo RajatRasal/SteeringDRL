@@ -3,20 +3,21 @@
 #SBATCH --output=./slurm_logs_vqvae/slurm.%N.%j.log
 
 source /vol/cuda/12.9.0/setup.sh
+source .venv/bin/activate
 
-export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}
-# 2) Give each job a unique DDP rendezvous (even if world_size=1)
-#    dist.init() often binds a store on MASTER_ADDR:MASTER_PORT.
-export MASTER_ADDR=127.0.0.1
-# Derive a stable-but-unique port from SLURM_JOB_ID (stay in 10000-19999)
-export MASTER_PORT=$((10000 + SLURM_JOB_ID % 5000))
+# export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}
+# # 2) Give each job a unique DDP rendezvous (even if world_size=1)
+# #    dist.init() often binds a store on MASTER_ADDR:MASTER_PORT.
+# export MASTER_ADDR=127.0.0.1
+# # Derive a stable-but-unique port from SLURM_JOB_ID (stay in 10000-19999)
+# export MASTER_PORT=$((10000 + SLURM_JOB_ID % 5000))
+# 
+# # (Optional) If your code respects these, force single-process DDP:
+# export WORLD_SIZE=1
+# export RANK=0
+# export LOCAL_RANK=0
 
-# (Optional) If your code respects these, force single-process DDP:
-export WORLD_SIZE=1
-export RANK=0
-export LOCAL_RANK=0
-
-export PATH="/vol/biomedic3/rrr2417/encdiff/k-diffusion/.venv/bin:/vol/biomedic3/rrr2417/.local/bin:$PATH"
+# export PATH="/vol/biomedic3/rrr2417/encdiff/k-diffusion/.venv/bin:/vol/biomedic3/rrr2417/.local/bin:$PATH"
 
 echo "=== Node: $(hostname) ==="
 echo "--- nvidia-smi ---"
@@ -45,4 +46,6 @@ python3 train_vqvae.py \
     --seed=$5 \
     --dump=10 \
     --lr=$6 \
-    --disc=$7
+    --disc=$7 \
+    --res=$8 \
+    --vocab=$9

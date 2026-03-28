@@ -11,7 +11,7 @@ from einops import einsum, rearrange, repeat
 
 from k_diffusion.models.image_v2 import MappingNet
 from k_diffusion import utils
-from k_diffusion.layers import FourierFeatures
+from k_diffusion.layers import FourierFeatures, Erf, Atan
 
 
 def timestep_embedding(timesteps, dim, max_period=10000, repeat_only=False):
@@ -340,11 +340,12 @@ class SpatialTransformer(nn.Module):
         norm_style=None,
         norm_ctx=False,
         adaln_ctx_dim=256,
-        learned_residual="rezero",
+        residual_init=None,
+        residual_constraint="identity",
         residual_scale=1.,
-        residual_min=None,
     ):
         super().__init__()
+        self.residual_init = residual_init
         self.in_channels = in_channels
         inner_dim = n_heads * d_head
         self.norm = Normalize(in_channels)
@@ -383,12 +384,18 @@ class SpatialTransformer(nn.Module):
             )
         )
 
-        if learned_residual:
-            self.alpha = nn.Parameter(torch.tensor(residual_scale))
-        else:
-            self.alpha = residual_scale
-        
-        self.residual_min = residual_min
+        if residual_init is not None:
+            self.residual = nn.Parameter(th.tensor(residual_init))
+            self.residual_constraint = {
+                "identity": nn.Identity(),
+                "tanh": nn.Tanh(),
+                "sigmoid": nn.Sigmoid(),
+                "softsign": nn.Softsign(),
+                "erf": Erf(), 
+                "arctan": Atan(),
+                "softplus": nn.Softplus(),
+            }[residual_constraint]
+            self.residual_scale = residual_scale
 
     def forward(self, x, context=None, emb=None):
         # note: if no context is given, cross-attention defaults to self-attention
@@ -401,12 +408,11 @@ class SpatialTransformer(nn.Module):
             x = block(x, context=context, emb=emb)
         x = rearrange(x, 'b (h w) c -> b c h w', h=h, w=w)
         x = self.proj_out(x)
-        # TODO: SHORTCUT
-        if self.residual_min is None:
-            alpha = self.alpha
+        if self.residual_init is None:
+            residual = x_in
         else:
-            alpha = self.residual_min + (1 - self.residual_min) * torch.sigmoid(self.alpha)
-        return x + alpha * x_in
+            residual = self.residual_constraint(self.residual / self.residual_scale) * x_in 
+        return x + residual
 
 
 class TimestepBlock(nn.Module):
@@ -427,10 +433,10 @@ class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
     support it as an extra input.
     """
 
-    def forward(self, x, emb, context=None):
+    def forward(self, x, emb, context=None, skip=None):
         for layer in self:
             if isinstance(layer, TimestepBlock):
-                x = layer(x, emb)
+                x = layer(x, emb, skip=skip)
             elif isinstance(layer, SpatialTransformer):
                 x = layer(x, context, emb)
             else:
@@ -537,6 +543,7 @@ class ResBlock(TimestepBlock):
         dims=2,
         up=False,
         down=False,
+        residual_skip=False,
     ):
         super().__init__()
         self.channels = channels
@@ -545,12 +552,19 @@ class ResBlock(TimestepBlock):
         self.out_channels = out_channels or channels
         self.use_conv = use_conv
         self.use_scale_shift_norm = use_scale_shift_norm
+        self.residual_skip = residual_skip
 
         self.in_layers = nn.Sequential(
             normalization(channels),
             nn.SiLU(),
             conv_nd(dims, channels, self.out_channels, 3, padding=1),
         )
+        if self.residual_skip:
+            self.skip_in_layers = nn.Sequential(
+                normalization(channels),
+                nn.SiLU(),
+                conv_nd(dims, channels, self.out_channels, 3, padding=1),
+            ) 
 
         self.updown = up or down
 
@@ -588,7 +602,7 @@ class ResBlock(TimestepBlock):
         else:
             self.skip_connection = conv_nd(dims, channels, self.out_channels, 1)
 
-    def forward(self, x, emb):
+    def forward(self, x, emb, skip=None):
         if self.updown:
             in_rest, in_conv = self.in_layers[:-1], self.in_layers[-1]
             h = in_rest(x)
@@ -597,6 +611,9 @@ class ResBlock(TimestepBlock):
             h = in_conv(h)
         else:
             h = self.in_layers(x)
+        if skip is not None and self.residual_skip:
+            skip = self.skip_in_layers(skip)
+            h = (h + skip) * (2 ** -0.5)
         emb_out = self.emb_layers(emb).type(h.dtype)
         while len(emb_out.shape) < len(h.shape):
             emb_out = emb_out[..., None]
@@ -667,6 +684,7 @@ class ImageDenoiserModelV4(nn.Module):
         channel_mult=(1, 2, 4, 8),
         dims=2,
         num_heads=8,
+        num_head_channels=None,
         use_scale_shift_norm=False,
         resblock_updown=True,
         conv_resample=False,
@@ -678,13 +696,19 @@ class ImageDenoiserModelV4(nn.Module):
         kappa=0.5,
         skip_dropout_rate=0,
         skip_drop_resolutions=(1, 2, 4),
-        transformer_learned_residual=False,
-        transformer_residual_scale=1.,
-        transformer_residual_min=None,
+        trans_residual_init=None,
+        trans_residual_constraint="identity",
+        trans_residual_scale=1.,
     ):
         super().__init__()
         assert context_dim is not None, 'Include the dimension of cross-attention conditioning'
         assert input_size[0] == input_size[1]
+
+        if num_heads is None:
+            assert num_head_channels is not None, 'Either num_heads or num_head_channels has to be set'
+
+        if num_head_channels is None:
+            assert num_heads is not None, 'Either num_heads or num_head_channels has to be set'
 
         self.in_channels = in_channels
         self.model_channels = model_channels
@@ -694,17 +718,13 @@ class ImageDenoiserModelV4(nn.Module):
         self.dropout = dropout
         self.channel_mult = channel_mult
         self.num_heads = num_heads
+        self.num_head_channels = num_head_channels
         self.skip_scale = skip_scale
         self.kappa = kappa
         self.skip_dropout_rate = skip_dropout_rate
         self.skip_drop_resolutions = skip_drop_resolutions
 
         time_embed_dim = model_channels * 4
-        # self.time_embed = nn.Sequential(
-        #     linear(model_channels, time_embed_dim),
-        #     nn.SiLU(),
-        #     linear(time_embed_dim, time_embed_dim),
-        # )
         self.timestep_embed = FourierFeatures(1, model_channels)
         self.time_embed = MappingNet(model_channels, time_embed_dim, n_layers=2)
         self.context_dim = context_dim
@@ -737,7 +757,11 @@ class ImageDenoiserModelV4(nn.Module):
                 ]
                 ch = mult * model_channels
                 if ds in attention_resolutions:
-                    dim_head = ch // num_heads
+                    if num_head_channels is None:
+                        dim_head = ch // num_heads
+                    else:
+                        num_heads = ch // num_head_channels
+                        dim_head = num_head_channels
                     layers.append(
                         SpatialTransformer(
                             ch,
@@ -748,9 +772,9 @@ class ImageDenoiserModelV4(nn.Module):
                             norm_style=norm_style,
                             norm_ctx=norm_ctx,
                             adaln_ctx_dim=time_embed_dim,
-                            learned_residual=transformer_learned_residual,
-                            residual_scale=transformer_residual_scale,
-                            residual_min=transformer_residual_min,
+                            residual_init=trans_residual_init,
+                            residual_constraint=trans_residual_constraint,
+                            residual_scale=trans_residual_scale,
                         )
                     )
                 self.input_blocks.append(TimestepEmbedSequential(*layers))
@@ -784,7 +808,11 @@ class ImageDenoiserModelV4(nn.Module):
                 ds *= 2
                 self._feature_size += ch
 
-        dim_head = ch // num_heads
+        if num_head_channels is None:
+            dim_head = ch // num_heads
+        else:
+            num_heads = ch // num_head_channels
+            dim_head = num_head_channels
         self.middle_block = TimestepEmbedSequential(
             ResBlock(
                 ch,
@@ -802,9 +830,9 @@ class ImageDenoiserModelV4(nn.Module):
                 norm_style=norm_style,
                 norm_ctx=norm_ctx,
                 adaln_ctx_dim=time_embed_dim,
-                learned_residual=transformer_learned_residual,
-                residual_scale=transformer_residual_scale,
-                residual_min=transformer_residual_min,
+                residual_init=trans_residual_init,
+                residual_constraint=trans_residual_constraint,
+                residual_scale=trans_residual_scale,
             ),
             ResBlock(
                 ch,
@@ -832,7 +860,11 @@ class ImageDenoiserModelV4(nn.Module):
                 ]
                 ch = model_channels * mult
                 if ds in attention_resolutions:
-                    dim_head = ch // num_heads
+                    if num_head_channels is None:
+                        dim_head = ch // num_heads
+                    else:
+                        num_heads = ch // num_head_channels
+                        dim_head = num_head_channels
                     layers.append(
                         SpatialTransformer(
                             ch,
@@ -843,9 +875,9 @@ class ImageDenoiserModelV4(nn.Module):
                             norm_style=norm_style,
                             norm_ctx=norm_ctx,
                             adaln_ctx_dim=time_embed_dim,
-                            learned_residual=transformer_learned_residual,
-                            residual_scale=transformer_residual_scale,
-                            residual_min=transformer_residual_min,
+                            residual_init=trans_residual_init,
+                            residual_constraint=trans_residual_constraint,
+                            residual_scale=trans_residual_scale,
                         )
                     )
                 if level and i == num_res_blocks:
@@ -946,13 +978,36 @@ class ImageDenoiserModelV4(nn.Module):
                 power = (L - 1 - i)
                 scale = self.kappa ** power
             skip = skip * scale
-            # if self.skip_dropout_rate > 0 and skip.shape[-1] in self.attention_resolutions:
-            # if skip.shape[-1] in self.attention_resolutions:
+            if self.skip_dropout_rate > 0:
+                skip = self.skip_dropout(skip)
             if skip.shape[-1] in self.skip_drop_sizes:
                 skip = th.zeros_like(skip)
-            # TODO: SHORTCUT
             h_in = th.cat([h, skip], dim=1)
             h = module(h_in, emb, context)
 
         out = self.out(h)
         return out
+
+
+if __name__ == "__main__":
+    import k_diffusion as K
+    files = [
+        # "./configs_final/shapes3d/B.json",
+        "./configs_final/voc/test0.json",
+    ]
+    for file in files:
+        device = th.device("cuda")
+        config = K.config.load_config(file)
+        model_config = config["model"]
+        size = model_config["input_size"]
+        model = K.config.make_model(config).to(device)
+        vqvae = K.config.make_vqvae(config).to(device)
+
+        # x = th.zeros([1, model_config['input_channels'], size[0] * 4, size[1] * 4], device=device)
+        x = th.zeros([1, model_config['input_channels'], 224, 224], device=device)
+        x = vqvae.encode(x)
+        print(x.shape)
+        # conds = th.ones([1, 10, 16], device=device)
+        conds = th.ones([1, 6, 192], device=device)
+        t = th.ones([1], device=device)
+        model(x, t, conds)
