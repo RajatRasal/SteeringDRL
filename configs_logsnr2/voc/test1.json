@@ -1,0 +1,79 @@
+{
+    "model": {
+        "type": "image_v5",
+        "loss_config": "vdmpp_v",
+        "input_size": [16, 16],
+        "input_channels": 3,
+        "out_channels": 3,
+        "model_channels": 128,
+        "num_res_blocks": 2,
+        "attention_resolutions": [2, 4, 8],
+        "skip_drop_resolutions": [],
+        "channel_mult": [1, 2, 3, 4],
+        "dropout": 0,
+        "num_heads": 8,
+        "use_scale_shift_norm": true,
+        "transformer_depth": 1,
+        "context_dim": 192,
+        "latent_units": 6,
+        "norm_style": "hybrid",
+        "norm_ctx": true,
+        "skip_scale": "default",
+        "skip_dropout_rate": 0,
+        "skip_residual_init": 0.0,
+        "skip_residual_constraint": "softplus",
+        "skip_residual_scale": 1.0,
+        "transformer_learned_residual": true,
+        "transformer_residual_scale": -2.0,
+        "lambda_min": -5,
+        "lambda_max": 12,
+        "lambda_min_start": 0,
+        "lambda_max_start": 10,
+        "widening_steps": 32000,
+        "lambda_noise_schedule": {
+            "type": "cosine",
+            "shift": 0
+        },
+        "weighting": {
+            "type": "sigmoid",
+            "shift": 0
+        }
+    },
+    "encoder": {
+        "type": "slot",
+        "enc_dict": {
+            "dino": "dino-vits8",
+            "enc_out_channels": 192,
+            "patch_size": 8,
+            "small_size": true,
+            "resolution": [224, 224]
+        },
+        "slot_dict": {
+            "num_slots": 6,
+            "slot_size": 192,
+            "slot_mlp_size": 384,
+            "num_iterations": 3,
+            "eps": 1e-6,
+            "drop_path": 0
+        }
+    },
+    "dataset": {
+        "type": "voc"
+    },
+    "optimizer": {
+        "type": "adamw",
+        "lr": 5e-4,
+        "betas": [0.95, 0.999],
+        "eps": 1e-6,
+        "weight_decay": 1e-3
+    },
+    "lr_sched": {
+        "type": "constant",
+        "warmup": 0.0
+    },
+    "ema_sched": {
+        "type": "inverse",
+        "power": 0.6667,
+        "max_value": 0.9999
+    }
+}

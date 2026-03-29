@@ -1,0 +1,70 @@
+{
+    "model": {
+        "type": "image_v4",
+        "input_size": [56, 56],
+        "loss_config": "vdmpp_v",
+        "input_channels": 3,
+        "out_channels": 3,
+        "model_channels": 128,
+        "num_res_blocks": 2,
+        "attention_resolutions": [2, 4, 8],
+        "channel_mult": [1, 2, 3, 4],
+        "dropout": 0,
+        "num_head_channels": 32,
+        "use_scale_shift_norm": true,
+        "resblock_updown": false,
+        "conv_resample": true,
+        "transformer_depth": 1,
+        "context_dim": 192,
+        "latent_units": 11,
+        "lambda_min": -8.5,
+        "lambda_max": 6.5,
+        "lambda_min_start": -8.5,
+        "lambda_max_start": 6.5,
+        "lambda_noise_schedule": {
+            "type": "cosine",
+            "shift": 0
+        },
+        "weighting": {
+            "type": "sech",
+            "shift": 0
+        }
+    },
+    "encoder": {
+        "type": "slot",
+        "slot_dict": {
+            "num_slots": 7,
+            "slot_size": 192,
+            "slot_mlp_size": 384,
+            "num_iterations": 3,
+            "eps": 1e-6,
+            "truncate": null,
+            "drop_path": 0
+        },
+        "enc_dict": {
+            "dino": "dino-vits8",
+            "patch_size": 8,
+            "small_size": true,
+            "enc_out_channels": 192
+        }
+    },
+    "dataset": {
+        "type": "coco"
+    },
+    "optimizer": {
+        "type": "adamw",
+        "lr": 1e-4,
+        "betas": [0.95, 0.999],
+        "eps": 1e-6,
+        "weight_decay": 1e-3
+    },
+    "lr_sched": {
+        "type": "cosine",
+        "warmup_pct": 0.05
+    },
+    "ema_sched": {
+        "type": "inverse",
+        "power": 0.6667,
+        "max_value": 0.9999
+    }
+}
