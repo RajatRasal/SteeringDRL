@@ -1,0 +1,24 @@
+# # tested with python 3.8.8/3.9.16
+# six
+# tqdm
+# numpy
+# wandb
+# pyyaml
+# # open3d  # optional, only used for point cloud visualization
+# matplotlib
+# opencv-python
+# moviepy
+# imageio
+# 
+# # please install PyTorch + CUDA manually (conda is recommended)
+# # see: https://pytorch.org/get-started/previous-versions/#linux-and-windows-2
+# # tested combinations:
+# # - pytorch 1.10.1 + cuda 10.2/11.1/11.3
+# # - pytorch 1.12.1 + cuda 11.3
+# # - pytorch 2.0.1 + cuda 11.8 (the latest version we tested)
+# # you may also want to install pytorch-lightning manually
+# # because the latest PL 2.x requires PyTorch 2.x, which requires CUDA >=11.7
+# # torch
+# # torchvision
+# pytorch-lightning
+# torchmetrics
