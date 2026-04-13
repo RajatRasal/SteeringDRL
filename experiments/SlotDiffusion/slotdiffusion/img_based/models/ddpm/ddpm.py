@@ -21,8 +21,9 @@ from .continuous_ddim import ContinuousDDIMSampler
 from .ddim import DDIMSampler
 from .ema import LitEma
 from .utils import default, is_list_tuple, make_beta_schedule, extract_to, \
-    noise_like, append_dims, logsnr_schedule_cosine, sigmoid_loss_weight
-from ..unet import UNetModel
+    noise_like, append_dims, logsnr_schedule_cosine, \
+    inverse_logsnr_schedule_cosine, sigmoid_loss_weight
+from ..unet import build_unet
 
 
 class DDPM(nn.Module):
@@ -81,6 +82,9 @@ class DDPM(nn.Module):
         continuous_loss='sigmoid',
         logsnr_min=-15.0,
         logsnr_max=15.0,
+        logsnr_min_start=None,
+        logsnr_max_start=None,
+        widening_steps=0,
         sigmoid_bias=-3.0,
         sampling_timesteps=None,
         continuous_dpm_fallback_steps=50,
@@ -90,9 +94,22 @@ class DDPM(nn.Module):
         self.continuous_loss = continuous_loss
         self.logsnr_min = float(logsnr_min)
         self.logsnr_max = float(logsnr_max)
+        self.logsnr_min_start = float(
+            logsnr_min if logsnr_min_start is None else logsnr_min_start)
+        self.logsnr_max_start = float(
+            logsnr_max if logsnr_max_start is None else logsnr_max_start)
+        self.widening_steps = int(widening_steps)
         self.sigmoid_bias = float(sigmoid_bias)
         self.sampling_timesteps = sampling_timesteps
         self.continuous_dpm_fallback_steps = int(continuous_dpm_fallback_steps)
+        if hasattr(self, '_continuous_step'):
+            self._continuous_step.zero_()
+        else:
+            self.register_buffer(
+                '_continuous_step',
+                torch.zeros((), dtype=torch.long),
+                persistent=True,
+            )
 
         if self.continuous_time:
             assert pred_target in ['eps', 'x0', 'v']
@@ -100,6 +117,7 @@ class DDPM(nn.Module):
                 raise NotImplementedError(
                     f'Unknown continuous schedule: {self.continuous_schedule}'
                 )
+            assert self.logsnr_min <= self.logsnr_min_start <= self.logsnr_max_start <= self.logsnr_max
             self.pred_target = pred_target
             self.beta_schedule = beta_schedule
             self.num_timesteps = int(timesteps)
@@ -177,6 +195,48 @@ class DDPM(nn.Module):
         sigma = torch.sqrt(torch.sigmoid(-logsnr))
         return alpha, sigma
 
+    def _continuous_band_bounds(self):
+        if self.widening_steps <= 0:
+            return self.logsnr_min, self.logsnr_max
+
+        progress = min(
+            float(self._continuous_step.item()) / max(self.widening_steps, 1),
+            1.0,
+        )
+        band_min = self.logsnr_min_start + progress * (
+            self.logsnr_min - self.logsnr_min_start)
+        band_max = self.logsnr_max_start + progress * (
+            self.logsnr_max - self.logsnr_max_start)
+        return band_min, band_max
+
+    def _continuous_band_t_bounds(self, device, dtype):
+        band_min, band_max = self._continuous_band_bounds()
+        band_min = torch.tensor(band_min, device=device, dtype=dtype)
+        band_max = torch.tensor(band_max, device=device, dtype=dtype)
+        t_lower = inverse_logsnr_schedule_cosine(
+            band_max,
+            logsnr_min=self.logsnr_min,
+            logsnr_max=self.logsnr_max,
+        )
+        t_upper = inverse_logsnr_schedule_cosine(
+            band_min,
+            logsnr_min=self.logsnr_min,
+            logsnr_max=self.logsnr_max,
+        )
+        return t_lower, t_upper
+
+    def _continuous_band_mass(self, device, dtype):
+        t_lower, t_upper = self._continuous_band_t_bounds(device, dtype)
+        return (t_upper - t_lower).clamp(min=1e-8)
+
+    def _continuous_sample_t(self, batch_size, device, dtype):
+        t_lower, t_upper = self._continuous_band_t_bounds(device, dtype)
+        u = torch.rand(batch_size, device=device, dtype=dtype)
+        # Low-discrepancy sampling inside the current band.
+        u = (u + torch.arange(batch_size, device=device, dtype=dtype) / batch_size) % 1.0
+        t = t_lower + (t_upper - t_lower) * u
+        return t.clamp(min=1e-6, max=1 - 1e-6)
+
     def _continuous_sample_xt_from_x0(self, x0, t=None, logsnr=None, noise=None):
         """Sample x_t from q(x_t | x_0) using a continuous logSNR schedule."""
         if logsnr is None:
@@ -227,8 +287,7 @@ class DDPM(nn.Module):
 
     def _continuous_loss_function(self, x0, **model_kwargs):
         B = x0.shape[0]
-        t = torch.rand(B, device=x0.device, dtype=torch.float32)
-        t = t.clamp(min=1e-6, max=1 - 1e-6)
+        t = self._continuous_sample_t(B, x0.device, torch.float32)
         logsnr = self._continuous_logsnr(t)
         noise = torch.randn_like(x0)
         x_noisy = self._continuous_sample_xt_from_x0(
@@ -236,10 +295,18 @@ class DDPM(nn.Module):
         model_out = self.forward(x_noisy, logsnr, **model_kwargs)
         pred_x0, _ = self._continuous_model_to_x0_eps(
             x_noisy, model_out, logsnr)
-        weight = append_dims(self._continuous_loss_weight(t, logsnr), x0.ndim)
+        weight = self._continuous_loss_weight(t, logsnr)
+        weight = weight * self._continuous_band_mass(x0.device, logsnr.dtype)
+        weight = append_dims(weight, x0.ndim)
+        self._continuous_step.add_(1)
         return {'denoise_loss': (weight * (pred_x0 - x0)**2).mean()}
 
     def _continuous_default_ddim_steps(self):
+        if self.sampling_timesteps is not None:
+            return int(self.sampling_timesteps)
+        return max(200, self.num_timesteps // 5)
+
+    def _default_ddim_steps(self):
         if self.sampling_timesteps is not None:
             return int(self.sampling_timesteps)
         return max(200, self.num_timesteps // 5)
@@ -422,10 +489,9 @@ class DDPM(nn.Module):
             )
         # faster sampling with DDIM
         if use_ddim:
-            ddim_steps = max(200, self.num_timesteps // 5)
             ddim_sampler = DDIMSampler(self, schedule=self.beta_schedule)
             return ddim_sampler.generate_imgs(
-                ddim_steps,
+                self._default_ddim_steps(),
                 shape,
                 conditioning=None,
                 verbose=verbose,
@@ -521,7 +587,7 @@ class DiffusionWrapper(nn.Module):
     def __init__(self, diff_model_config, conditioning_key):
         super().__init__()
 
-        self.diffusion_model = UNetModel(**diff_model_config)
+        self.diffusion_model = build_unet(diff_model_config)
         self.conditioning_key = conditioning_key
         assert self.conditioning_key in [None, 'concat', 'crossattn']
 

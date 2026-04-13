@@ -88,9 +88,16 @@ export no_proxy="localhost,127.0.0.1,::1"
 # echo =================
 # 
 
+# for i in $(seq 1 5); do
+#     python slotdiffusion/img_based/test_seg.py \
+#         --params "slotdiffusion/img_based/configs/sa_ldm/sa_ldm_dino_voc_params-res224-dup$i.py" \
+#         --weight "checkpoint/sa_ldm_dino_voc_params-res224-dup$i/models/model_70209.pth" \
+#         --bs 64
+# done
+
 for i in $(seq 1 5); do
     python slotdiffusion/img_based/test_seg.py \
-        --params "slotdiffusion/img_based/configs/sa_ldm/sa_ldm_dino_voc_params-res224-dup$i.py" \
-        --weight "checkpoint/sa_ldm_dino_voc_params-res224-dup$i/models/model_70209.pth" \
+        --params "slotdiffusion/img_based/configs/sa_ldm/sa_ldm_dino_voc_params-res224_ctsigmoid_v5_nobias_bw_vpred-dup$i.py" \
+        --weight "checkpoint/sa_ldm_dino_voc_params-res224_ctsigmoid_v5_nobias_bw_vpred-dup$i/models/model_82500.pth" \
         --bs 64
 done

@@ -143,6 +143,17 @@ def logsnr_schedule_cosine(t, logsnr_min=-15.0, logsnr_max=15.0):
     return -2.0 * torch.log(torch.tan(theta))
 
 
+def inverse_logsnr_schedule_cosine(logsnr, logsnr_min=-15.0, logsnr_max=15.0):
+    """Inverse cosine logSNR schedule returning normalized t in [0, 1]."""
+    t_min = math.atan(math.exp(-0.5 * float(logsnr_max)))
+    t_max = math.atan(math.exp(-0.5 * float(logsnr_min)))
+    t_min = logsnr.new_tensor(t_min)
+    t_max = logsnr.new_tensor(t_max)
+    theta = torch.atan(torch.exp(-0.5 * logsnr))
+    t = (theta - t_min) / (t_max - t_min)
+    return t.clamp(0., 1.)
+
+
 def dlogsnr_schedule_cosine_dt(t, logsnr_min=-15.0, logsnr_max=15.0):
     """Derivative of the cosine logSNR schedule with respect to `t`."""
     t = t.clamp(0., 1.)

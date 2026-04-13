@@ -229,10 +229,9 @@ class CondDDPM(DDPM):
             return ret
         # faster sampling with DDIM
         if use_ddim:
-            ddim_steps = max(200, self.num_timesteps // 5)
             ddim_sampler = DDIMSampler(self, schedule=self.beta_schedule)
             return ddim_sampler.generate_imgs(
-                ddim_steps,
+                self._default_ddim_steps(),
                 shape,
                 conditioning=cond,
                 verbose=verbose,

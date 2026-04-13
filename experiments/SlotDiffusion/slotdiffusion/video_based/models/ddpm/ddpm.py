@@ -21,7 +21,7 @@ from .ddim import DDIMSampler
 from .ema import LitEma
 from .utils import default, is_list_tuple, make_beta_schedule, extract_to, \
     noise_like
-from ..unet import UNetModel
+from ..unet import build_unet
 
 
 class DDPM(nn.Module):
@@ -339,7 +339,7 @@ class DiffusionWrapper(nn.Module):
     def __init__(self, diff_model_config, conditioning_key):
         super().__init__()
 
-        self.diffusion_model = UNetModel(**diff_model_config)
+        self.diffusion_model = build_unet(diff_model_config)
         self.conditioning_key = conditioning_key
         assert self.conditioning_key in [None, 'concat', 'crossattn']
 
