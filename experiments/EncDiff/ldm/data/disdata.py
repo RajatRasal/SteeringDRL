@@ -7,7 +7,7 @@ import scipy.io as sio
 from PIL import Image
 from sklearn.utils.extmath import cartesian
 import os
-import lmdb
+# import lmdb
 from io import BytesIO
 import torchvision.transforms.functional as Ftran
 import PIL
@@ -728,7 +728,7 @@ class Horse_lmdb(Dataset):
         
 class Shapes3DTrain(Shapes3D):
     def __init__(self, **kwargs):
-        super().__init__(path='/vol/biomedic2/rrr2417/Diffusion-Representation-Learning/datasets',
+        super().__init__(path='./data',
         # super().__init__(path='~/',
                 original_resolution=None,
                 **kwargs)
@@ -749,14 +749,14 @@ class MPI3DTrainSD(MPI3D_SD):
 
 class MPI3DTrain(MPI3D):
     def __init__(self, **kwargs):
-        super().__init__(path='/vol/biomedic2/rrr2417/Diffusion-Representation-Learning/datasets',
+        super().__init__(path='./data',
                 original_resolution=None,
                 **kwargs)
 
 
 class Cars3DTrain(Cars3D):
     def __init__(self, **kwargs):
-        super().__init__(path='/vol/biomedic2/rrr2417/Diffusion-Representation-Learning/datasets/data/',
+        super().__init__(path='./data',
                 original_resolution=None,
                 **kwargs)
 
