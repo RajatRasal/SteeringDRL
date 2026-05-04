@@ -31,7 +31,7 @@ def write_text(result_dict,file):
     with open(file,'w+') as f:
         json.dump(result_dict,f)
 
-def eval_func(eval_dataset, data_tensor, metric_folder, it, preflix=""):
+def eval_func(eval_dataset, data_tensor, metric_folder, it, preflix="", extra_metrics=None):
     print(data_tensor.shape)
 
     pca_list = []
@@ -90,7 +90,9 @@ def eval_func(eval_dataset, data_tensor, metric_folder, it, preflix=""):
         result_dict = compute_factor_vae(eval_dataset,_representation,random_state=np.random.RandomState(0),artifact_dir=None)
         print("factor VAE score:" + str(result_dict))
         total_results_dict["factor_VAE" + preflix] = result_dict
-        write_text(total_results_dict,metric_folder + f"/{it}.json")
+    if extra_metrics:
+        total_results_dict.update(extra_metrics)
+    write_text(total_results_dict, metric_folder + f"/{it}.json")
     return total_results_dict
 
 
@@ -842,4 +844,3 @@ if __name__ == "__main__":
         print("TESTING")
         # trainer.test(model, data)
         trainer.validate(model, data)
-

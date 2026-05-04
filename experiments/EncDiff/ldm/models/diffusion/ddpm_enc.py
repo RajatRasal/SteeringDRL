@@ -74,7 +74,11 @@ class DDPM(pl.LightningModule):
                  use_positional_encodings=False,
                  learn_logvar=False,
                  logvar_init=0.,
-                 eval_name=None
+                 eval_name=None,
+                 recon_eval_num_images=1000,
+                 recon_eval_steps=200,
+                 recon_eval_eta=1.0,
+                 run_metrics_on_sanity_check=False,
                  ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
@@ -127,6 +131,12 @@ class DDPM(pl.LightningModule):
         elif eval_name == "cars3d":
             import data.ground_truth.cars3d as dcars3d
             self.label_dataset = dcars3d.Dataset(np.arange(0,17568))
+
+        self.recon_eval_num_images = int(recon_eval_num_images)
+        self.recon_eval_steps = int(recon_eval_steps)
+        self.recon_eval_eta = float(recon_eval_eta)
+        self.run_metrics_on_sanity_check = bool(run_metrics_on_sanity_check)
+        self._recon_lpips_fn = None
 
 
     def register_schedule(self, given_betas=None, beta_schedule="linear", timesteps=1000,
@@ -375,6 +385,8 @@ class DDPM(pl.LightningModule):
 
     @torch.no_grad()
     def validation_step(self, batch, batch_idx):
+        if hasattr(self, "_maybe_init_scale_factor_from_batch"):
+            self._maybe_init_scale_factor_from_batch(batch)
         x, oc = self.get_input(batch, self.first_stage_key)
         if self.model.conditioning_key is not None:
             assert oc is not None
@@ -400,22 +412,43 @@ class DDPM(pl.LightningModule):
             self.model_ema(self.model)
 
     def on_validation_epoch_end(self, *args, **kwargs):
-        if len(self.validation_step_scalars) != 2:
+        is_sanity = bool(getattr(self.trainer, "sanity_checking", False))
+        if is_sanity and not self.run_metrics_on_sanity_check:
+            self.validation_step_outputs.clear()
+            self.validation_step_scalars.clear()
+            return
+
+        if len(self.validation_step_scalars) > 0:
             repre_np = np.concatenate(self.validation_step_scalars, axis=0)
             save_path = os.path.join(self.logger.save_dir, "metrics_sin")
             if not os.path.exists(save_path):
                 os.mkdir(save_path)
-            value_dict = eval_func(self.label_dataset, repre_np, save_path, self.global_step, preflix="")
-        elif len(self.validation_step_outputs) != 2:
+            value_dict = eval_func(
+                self.label_dataset,
+                repre_np,
+                save_path,
+                self.global_step,
+                preflix="",
+            )
+        elif len(self.validation_step_outputs) > 0:
             repre_np = np.concatenate(self.validation_step_outputs, axis=0)
             save_path = os.path.join(self.logger.save_dir, "metrics")
             if not os.path.exists(save_path):
                 os.mkdir(save_path)
-            value_dict = eval_func(self.label_dataset, repre_np, save_path, self.global_step, preflix="")
+            value_dict = eval_func(
+                self.label_dataset,
+                repre_np,
+                save_path,
+                self.global_step,
+                preflix="",
+            )
         
             # self.log('val/loss_simple_ema', value_dict['dci'])
         self.validation_step_outputs.clear()
         self.validation_step_scalars.clear()
+
+    def get_extra_eval_metrics(self):
+        return {}
         
 
     def _get_rows_from_list(self, samples):
@@ -518,14 +551,118 @@ class LatentDiffusion(DDPM):
         self.cond_stage_forward = cond_stage_forward
         self.clip_denoised = False
         self.bbox_tokenizer = None  
+        self._scale_factor_initialized = not self.scale_by_std
 
         self.restarted_from_ckpt = False
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path, ignore_keys)
             self.restarted_from_ckpt = True
+            self._scale_factor_initialized = True
         # self.logvar.cuda()
         self.validation_step_outputs = []
         self.validation_step_scalars = []
+
+    def _get_recon_lpips_fn(self):
+        if self._recon_lpips_fn is None:
+            from taming.modules.losses.lpips import LPIPS
+            self._recon_lpips_fn = LPIPS().eval().to(self.device)
+            self._recon_lpips_fn.requires_grad_(False)
+        return self._recon_lpips_fn
+
+    @torch.no_grad()
+    def _compute_recon_lpips(self):
+        if self.recon_eval_num_images <= 0:
+            return None
+        if self.trainer is None or self.trainer.datamodule is None:
+            return None
+
+        val_loader = self.trainer.datamodule.val_dataloader()
+        lpips_fn = self._get_recon_lpips_fn()
+        remaining = self.recon_eval_num_images
+        lpips_total = 0.0
+        count = 0
+        total_batches = None
+        if hasattr(val_loader, "__len__"):
+            total_batches = len(val_loader)
+            batch_size = getattr(val_loader, "batch_size", None)
+            if batch_size is not None and batch_size > 0:
+                capped_batches = (self.recon_eval_num_images + batch_size - 1) // batch_size
+                total_batches = min(total_batches, capped_batches)
+
+        with self.ema_scope("Recon Eval"):
+            progress = tqdm(
+                val_loader,
+                total=total_batches,
+                desc="Recon Eval LPIPS",
+                disable=getattr(self, "global_rank", 0) != 0,
+            )
+            for batch in progress:
+                if remaining <= 0:
+                    break
+                batch_n = min(batch[self.first_stage_key].shape[0], remaining)
+                z, c, x, xrec, xc, orc = self.get_input(
+                    batch,
+                    self.first_stage_key,
+                    return_first_stage_outputs=True,
+                    force_c_encode=True,
+                    return_original_cond=True,
+                    bs=batch_n,
+                    return_false=True,
+                )
+                if getattr(self, "use_continuous_noise", False):
+                    samples, _ = self.sample_log(
+                        cond=c,
+                        batch_size=batch_n,
+                        ddim=True,
+                        ddim_steps=self.recon_eval_steps,
+                        eta=self.recon_eval_eta,
+                    )
+                else:
+                    samples = self.sample(
+                        cond=c,
+                        batch_size=batch_n,
+                        timesteps=self.recon_eval_steps,
+                        verbose=False,
+                    )
+                x_recon = self.decode_first_stage(samples)
+                lpips_val = lpips_fn(x[:batch_n], x_recon).mean()
+                lpips_total += float(lpips_val.item()) * batch_n
+                count += batch_n
+                remaining -= batch_n
+                progress.set_postfix(images=count, lpips=f"{lpips_total / count:.4f}")
+
+        if count == 0:
+            return None
+        return lpips_total / count
+
+    def get_extra_eval_metrics(self):
+        return {}
+
+    @torch.no_grad()
+    def _maybe_init_scale_factor_from_batch(self, batch):
+        if not self.scale_by_std or self._scale_factor_initialized or self.restarted_from_ckpt:
+            return
+
+        if self.first_stage_model is not None and not isinstance(self.first_stage_model, IdentityFirstStage):
+            assert torch.allclose(
+                self.scale_factor.float().reshape(-1)[0],
+                torch.tensor(1.0, device=self.device)
+            ), 'rather not use custom rescaling and std-rescaling simultaneously'
+            print("### USING STD-RESCALING ###")
+            x = super().get_input(batch, self.first_stage_key).to(self.device)
+            encoder_posterior = self.encode_first_stage(x)
+            z = self.get_first_stage_encoding(encoder_posterior).detach()
+            del self.scale_factor
+            self.register_buffer('scale_factor', 1. / z.flatten().std())
+            print(f"setting self.scale_factor to {self.scale_factor}")
+            print("### USING STD-RESCALING ###")
+        else:
+            del self.scale_factor
+            self.register_buffer('scale_factor', torch.tensor([1.0], device=self.device))
+            print(f"setting self.scale_factor to {self.scale_factor}")
+            print("### USING STD-RESCALING ###")
+
+        self._scale_factor_initialized = True
 
     def make_cond_schedule(self, ):
         self.cond_ids = torch.full(size=(self.num_timesteps,), fill_value=self.num_timesteps - 1, dtype=torch.long)
@@ -536,25 +673,8 @@ class LatentDiffusion(DDPM):
     @torch.no_grad()
     def on_train_batch_start(self, batch, batch_idx, dataloader_idx):
         # only for very first batch
-        
-        if self.scale_by_std and self.current_epoch == 0 and self.global_step == 0 and batch_idx == 0 and not self.restarted_from_ckpt:
-            if self.first_stage_model != None and not isinstance(self.first_stage_model, IdentityFirstStage):
-                assert self.scale_factor == 1., 'rather not use custom rescaling and std-rescaling simultaneously'
-                # set rescale weight to 1./std of encodings
-                print("### USING STD-RESCALING ###")
-                x = super().get_input(batch, self.first_stage_key)
-                x = x.to(self.device)
-                encoder_posterior = self.encode_first_stage(x)
-                z = self.get_first_stage_encoding(encoder_posterior).detach()
-                del self.scale_factor
-                self.register_buffer('scale_factor', 1. / z.flatten().std())
-                print(f"setting self.scale_factor to {self.scale_factor}")
-                print("### USING STD-RESCALING ###")
-            else:
-                del self.scale_factor
-                self.register_buffer('scale_factor', torch.Tensor([1]).cuda())
-                print(f"setting self.scale_factor to {self.scale_factor}")
-                print("### USING STD-RESCALING ###")
+        if self.current_epoch == 0 and self.global_step == 0 and batch_idx == 0:
+            self._maybe_init_scale_factor_from_batch(batch)
 
     def register_schedule(self,
                           given_betas=None, beta_schedule="linear", timesteps=1000,
