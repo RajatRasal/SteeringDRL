@@ -1,0 +1,65 @@
+{
+    "model": {
+        "type": "image_v5",
+        "loss_config": "vdmpp_v",
+        "input_size": [16, 16],
+        "input_channels": 3,
+        "out_channels": 3,
+        "model_channels": 64,
+        "num_res_blocks": 2,
+        "attention_resolutions": [1, 2, 4],
+        "channel_mult": [1, 2, 4, 4],
+        "dropout": 0,
+        "num_heads": 8,
+        "use_scale_shift_norm": true,
+        "transformer_depth": 1,
+        "context_dim": 16,
+        "latent_units": 10,
+        "norm_style": "hybrid",
+        "norm_ctx": true,
+        "lambda_min": -5,
+        "lambda_max": 12,
+        "lambda_min_start": -5,
+        "lambda_max_start": 12,
+        "widening_steps": 0,
+        "skip_residual_init": 0.0,
+        "skip_residual_constraint": "softplus",
+        "lambda_noise_schedule": {
+            "type": "cosine",
+            "shift": 0
+        },
+        "weighting": {
+            "type": "exp",
+            "shift": 0
+        }
+    },
+    "encoder": {
+        "type": "image_improved2",
+        "internal_dim": 128,
+        "context_dim": 16,
+        "latent_units": 10,
+        "res_blocks": 6,
+        "tokeniser": "film",
+        "input_layer": "conv",
+        "flatten": "linear"
+    },
+    "dataset": {
+        "type": "cars3d"
+    },
+    "optimizer": {
+        "type": "adamw",
+        "lr": 5e-4,
+        "betas": [0.95, 0.999],
+        "eps": 1e-6,
+        "weight_decay": 1e-3
+    },
+    "lr_sched": {
+        "type": "constant",
+        "warmup": 0.0
+    },
+    "ema_sched": {
+        "type": "inverse",
+        "power": 0.6667,
+        "max_value": 0.9999
+    }
+}
