@@ -357,6 +357,7 @@ def make_encoder(config):
             d=internal_dim,
             context_dim=context_dim,
             latent_unit=latent_units,
+            legacy_resblocks=config['encoder'].get('legacy_resblocks', False),
         )
     elif config['encoder']['type'] == 'image_improved':
         latent_units = config['encoder']['latent_units']
@@ -415,7 +416,12 @@ VQVAE_CKPT_PATHS = {
 
 def make_vqvae(config):
     dataset = config['dataset']['type']
-    path = VQVAE_CKPT_PATHS[dataset]
+    # Allow experiments to pin their VQ-VAE in the copied JSON config.  Falling
+    # back to the global mapping preserves existing configurations.
+    path = config['dataset'].get('vqvae_checkpoint')
+    if path is None:
+        path = VQVAE_CKPT_PATHS[dataset]
+    print(f"VQ-VAE checkpoint: {path}")
     if dataset in ['shapes3d', 'mpi3d', 'cars3d']:
         with open(path, "rb") as f:
             data = pickle.load(f)
@@ -444,11 +450,15 @@ def make_vqvae(config):
         vqvae.load_state_dict(ckpt, strict=True)
     if 'vqvae_scale_factor' in config['dataset']:
         if config['dataset']['vqvae_scale_factor']:
-            scale_factor = torch.load(os.path.join(os.path.dirname(path), "std.pt"))
+            scale_factor_path = config['dataset'].get(
+                'vqvae_scale_factor_path',
+                os.path.join(os.path.dirname(path), "std.pt"),
+            )
+            scale_factor = torch.load(scale_factor_path)
         else:
-            scale_factor = 1.0
+            scale_factor = torch.tensor(1.0)
     else:
-        scale_factor = 1.0
+        scale_factor = torch.tensor(1.0)
     print(f"Scale Factor: {scale_factor}")
     vqvae = VQVAEWrapper(vqvae, scale_factor)
     return vqvae

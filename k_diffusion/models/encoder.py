@@ -13,9 +13,9 @@ from k_diffusion.resnet import resnet18, resnet34
 ##################
 # Encoder from EncDiff
 
-class EncResBlock(nn.Module):
+class LegacyEncResBlock(nn.Module):
     def __init__(self, in_channels, out_channels, mid_channels=None, bn=False):
-        super(EncResBlock, self).__init__()
+        super().__init__()
 
         if mid_channels is None:
             mid_channels = out_channels
@@ -35,10 +35,27 @@ class EncResBlock(nn.Module):
 
 
 class ImageEncoder(nn.Module):
-    def __init__(self, d, context_dim, latent_unit, num_channels=3):
+    def __init__(
+        self,
+        d,
+        context_dim,
+        latent_unit,
+        num_channels=3,
+        legacy_resblocks=False,
+    ):
         super().__init__()
         self.context_dim = context_dim
         self.latent_unit = latent_unit
+        if legacy_resblocks:
+            residual_blocks = [
+                LegacyEncResBlock(d, d, bn=True),
+                LegacyEncResBlock(d, d, bn=True),
+            ]
+        else:
+            residual_blocks = [
+                EncResBlock(d, d, norm="bn"),
+                EncResBlock(d, d, norm="bn"),
+            ]
 
         self.encoder = nn.Sequential(
             # 64 -> 32
@@ -54,9 +71,9 @@ class ImageEncoder(nn.Module):
             nn.Conv2d(d, d, kernel_size=4, stride=2, padding=1),
             nn.BatchNorm2d(d), nn.ReLU(inplace=True),
 
-            EncResBlock(d, d, norm="bn"),
+            residual_blocks[0],
             nn.BatchNorm2d(d), nn.ReLU(inplace=True),
-            EncResBlock(d, d, norm="bn"),
+            residual_blocks[1],
 
             nn.Flatten(start_dim=1),                # keeps B (e.g., 512)
             nn.Linear(d * 4 * 4, latent_unit),      # no hardcoding
