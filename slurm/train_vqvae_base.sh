@@ -37,15 +37,19 @@ else:
     print("CUDA not available.")
 PY
 
+disc_args=()
+if [[ "${6,,}" == "true" ]]; then
+    disc_args=(--disc)
+fi
+
 python3 train_vqvae.py \
     --out-dir=$1 \
     --dataset=$2 \
-    --cbase=$3 \
     --duration=30 \
-    --batch=$4 \
-    --seed=$5 \
+    --batch=$3 \
+    --seed=$4 \
     --dump=10 \
-    --lr=$6 \
-    --disc=$7 \
-    --res=$8 \
-    --vocab=$9
+    --lr=$5 \
+    "${disc_args[@]}" \
+    --res=$7 \
+    --vocab=$8

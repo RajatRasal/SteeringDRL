@@ -2,7 +2,6 @@
 
 TRAINING_DIR="ckpts/vqvae"
 MAX_SEEDS=0
-CBASE=32
 BATCH=128
 LR=5e-5
 DISC=True
@@ -24,7 +23,7 @@ job_count=0
 #         sbatch -J "vqvae-$dataset-$seed" \
 #                -p gpus24 \
 #                --nodelist=$node \
-#                ./slurm/slurm_vqvae_base.sh $TRAINING_DIR $dataset $CBASE $BATCH $seed $LR $DISC $RES $VOCAB
+#                ./slurm/slurm_vqvae_base.sh $TRAINING_DIR $dataset $BATCH $seed $LR $DISC $RES $VOCAB
 # 
 #         # Increment global job counter
 #         ((job_count++))
@@ -33,4 +32,4 @@ job_count=0
 
 sbatch -J "vqvae-clevrtex-0" \
     -p gpus48 \
-    ./slurm/train_vqvae_base.sh $TRAINING_DIR clevrtex 64 64 0 3e-4 True 128 4096
+    ./slurm/train_vqvae_base.sh $TRAINING_DIR clevrtex 64 0 3e-4 True 128 4096

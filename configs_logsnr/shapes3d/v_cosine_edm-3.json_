@@ -37,7 +37,7 @@
     },
     "dataset": {
         "type": "shapes3d",
-        "vqvae_checkpoint": "ckpts/vqvae/2_shapes3d_True_32_128_5e-05/training-state-030000.pkl",
+        "vqvae_checkpoint": "ckpts/vqvae/2_shapes3d_True_32_128_5e-05/training-state-030000.pth",
         "vqvae_scale_factor": false
     },
     "optimizer": {

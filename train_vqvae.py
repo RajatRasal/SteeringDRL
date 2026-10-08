@@ -1,41 +1,57 @@
-import time
-import dnnlib
-import click
+import argparse
 import torch
 from data.ground_truth import named_data
 import numpy as np
-from torch_utils import training_stats
-import pickle 
-import psutil
-import copy
 import os
 import json
 from torch.utils.data import DataLoader, TensorDataset
-from torch_utils import training_stats
 import matplotlib.pyplot as plt
 from torchvision.utils import make_grid
 
+import k_diffusion as K
+from vqvae.VQVAE import VQVAE
+from vqvae.losses.perceptual import VQLPIPSLoss
+from vqvae.losses.perceptual_disc import VQLPIPSWithDiscriminatorLoss
 
-@click.command()
-# Main options.
-@click.option('--out-dir',       help='Where to save the results', metavar='DIR',                   type=str, required=True)
-@click.option('--dataset',       help='Path to the dataset', metavar='shapes3d|mpi3d|cars3d',       type=click.Choice(['shapes3d', 'mpi3d', 'cars3d']), default='shapes3d', show_default=True)
-# Hyperparameters
-@click.option('--disc',          help='Include discriminator in loss', metavar='BOOL',              type=bool, default=False)
-@click.option('--duration',      help='Training duration', metavar='MIMG',                          type=click.FloatRange(min=0, min_open=True), default=200, show_default=True)
-@click.option('--batch',         help='Total batch size', metavar='INT',                            type=click.IntRange(min=1), default=128, show_default=True)
-@click.option('--cbase',         help='Channel multiplier  [default: varies]', metavar='INT',       type=int, default=64)
-@click.option('--lr',            help='Learning rate', metavar='FLOAT',                             type=click.FloatRange(min=0, min_open=True), default=1e-3, show_default=True)
-@click.option('--num-workers',          help='Dataloader workers', metavar='INT',                   type=int, default=0)
-# I/O-related.
-@click.option('--tick',          help='How often to print progress', metavar='KIMG',                type=click.IntRange(min=1), default=50, show_default=True)
-@click.option('--seed',          help='Random seed  [default: random]', metavar='INT',              type=int, default=0)
-@click.option('--dump',          help='How often to dump state', metavar='TICKS',                   type=click.IntRange(min=1), default=50, show_default=True)
-def main(**kwargs):
-    opts = dnnlib.EasyDict(kwargs)
+
+def save_state_dict(net, path):
+    """Save CPU model weights without overwriting an existing checkpoint."""
+    state = net.state_dict()
+    for name, tensor in state.items():
+        state[name] = tensor.detach().cpu()
+    with open(path, 'xb') as f:
+        torch.save(state, f)
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description='Train a VQ-VAE for Shapes3D, Cars3D, or MPI3D.',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument('--out-dir', required=True, help='Where to save the results')
+    parser.add_argument('--dataset', choices=['shapes3d', 'mpi3d', 'cars3d'],
+                        default='shapes3d', help='Training dataset')
+    parser.add_argument('--disc', action='store_true', help='Include discriminator in loss')
+    parser.add_argument('--duration', type=float, default=200, help='Training duration in MIMG')
+    parser.add_argument('--batch', type=int, default=128, help='Total batch size')
+    parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
+    parser.add_argument('--num-workers', type=int, default=0, help='DataLoader workers')
+    parser.add_argument('--tick', type=int, default=50, help='Progress reporting interval in KIMG')
+    parser.add_argument('--seed', type=int, default=0, help='Random seed')
+    parser.add_argument('--dump', type=int, default=50, help='Checkpoint interval in ticks')
+    opts = parser.parse_args(argv)
+    for name in ('duration', 'batch', 'lr', 'tick', 'dump'):
+        if not getattr(opts, name) > 0:
+            parser.error(f'--{name} must be greater than zero')
+    if opts.num_workers < 0:
+        parser.error('--num-workers must be nonnegative')
+    return opts
+
+
+def main(argv=None):
+    opts = parse_args(argv)
 
     # Initialize.
-    start_time = time.time()
     np.random.seed(opts.seed)
     torch.manual_seed(np.random.randint(1 << 31))
     torch.backends.cudnn.benchmark = True
@@ -45,67 +61,56 @@ def main(**kwargs):
     device = torch.device('cuda')
 
     opts.kimg_per_tick = opts.tick
-    
-    opts.network_kwargs = dnnlib.EasyDict(
-        class_name="vqvae.VQVAE.VQVAE",
-        enc_dec_dict={
-            "resolution": 64,
-            "in_channels": 3,
-            "z_channels": 3,
-            "ch": opts.cbase,
-            "ch_mult": [1, 2, 4],
-            "num_res_blocks": 2,
-            "attn_resolutions": [],
-            "out_ch": 3,
-            "dropout": 0.0,
-        },
-        vq_dict={
-            "n_embed": 2048,
-            "embed_dim": 3,
-            # "percept_loss_w": 1.0,
-        }
-    )
-    opts.loss_kwargs = dnnlib.EasyDict(
-        class_name=f"vqvae.losses.{'perceptual_disc.VQLPIPSWithDiscriminatorLoss' if opts.disc else 'perceptual.VQLPIPSLoss'}",
-        # percept_loss_w=1.0,
-    )
-    opts.optimiser_kwargs = dnnlib.EasyDict(
-        class_name="torch.optim.Adam",
-        lr=opts.lr,
-        betas=[0.9, 0.999],
-        eps=1e-8,
-    )
 
     # Logging directory
     print("Creating output directory")
     os.makedirs(opts.out_dir, exist_ok=True)
-    run_dir = os.path.join(opts.out_dir, f"{opts.seed}_{opts.dataset}_{opts.disc}_{opts.cbase}_{opts.batch}_{opts.lr}")
+    run_dir = os.path.join(opts.out_dir, f"{opts.seed}_{opts.dataset}_{opts.disc}_32_{opts.batch}_{opts.lr}")
     assert not os.path.exists(run_dir)
     os.makedirs(run_dir)
     with open(os.path.join(run_dir, 'training_options.json'), 'wt') as f:
-        json.dump(opts, f, indent=2)
-    dnnlib.util.Logger(file_name=os.path.join(run_dir, 'log.txt'), file_mode='a', should_flush=True)
+        json.dump(vars(opts), f, indent=2)
+    loss_columns = ['loss_perceptual', 'loss_discriminator'] if opts.disc else ['loss']
+    metrics_log = K.utils.CSVLogger(
+        os.path.join(run_dir, 'metrics.csv'), ['tick', 'nimgs', *loss_columns],
+    )
 
     # Construct network
     print("Constructing network")
-    net = dnnlib.util.construct_class_by_name(**opts.network_kwargs)
+    net = VQVAE(
+        enc_dec_dict=dict(
+            resolution=64,
+            in_channels=3,
+            z_channels=3,
+            ch=32,
+            ch_mult=[1, 2, 4],
+            num_res_blocks=2,
+            attn_resolutions=[],
+            out_ch=3,
+            dropout=0.0,
+        ),
+        vq_dict=dict(n_embed=2048, embed_dim=3),
+    )
     net.train().requires_grad_(True).to(device)
 
     # Construct loss
     print("Constructing Loss")
-    loss_fn = dnnlib.util.construct_class_by_name(**opts.loss_kwargs).to(device)
+    loss_fn = (VQLPIPSWithDiscriminatorLoss() if opts.disc else VQLPIPSLoss()).to(device)
 
     # Setup optimiser
     print("Setting up optimiser")
-    optimiser = dnnlib.util.construct_class_by_name(
-        params=list(net.parameters()),
-        **opts.optimiser_kwargs,
+    optimiser = torch.optim.Adam(
+        net.parameters(),
+        lr=opts.lr,
+        betas=(0.9, 0.999),
+        eps=1e-8,
     )
     if opts.disc:
-        optimiser_disc = dnnlib.util.construct_class_by_name(
-            params=list(loss_fn.discriminator.parameters()),
-            # TODO: Warmup with disc_start parameter
-            **opts.optimiser_kwargs,
+        optimiser_disc = torch.optim.Adam(
+            loss_fn.discriminator.parameters(),
+            lr=opts.lr,
+            betas=(0.9, 0.999),
+            eps=1e-8,
         )
 
     # Load dataset
@@ -116,7 +121,7 @@ def main(**kwargs):
     dl_eval = DataLoader(
         dataset=dataset_obj_eval,
         batch_size=opts.batch,
-        num_workers=0,
+        num_workers=opts.num_workers,
         shuffle=False,
         drop_last=True,
     )
@@ -129,9 +134,8 @@ def main(**kwargs):
     cur_tick = 0
     cur_nimg = 0
     tick_start_nimg = cur_nimg
-    tick_start_time = time.time()
-    maintenance_time = tick_start_time - start_time
-    stats_jsonl = None
+    loss_sums = [0.0] * len(loss_columns)
+    loss_count = 0
 
     while True:
         # TODO: warmup = 0.05 of total steps
@@ -145,8 +149,7 @@ def main(**kwargs):
             out_dict = net(images)
             loss, _ = loss_fn(out_dict["quant_loss"], images, out_dict["recon"])
 
-            training_stats.report("Loss", loss)
-            print(f"{cur_nimg}, loss:", loss.item())
+            loss_sums[0] += loss.detach().item()
 
             loss.backward()
             optimiser.step()
@@ -164,7 +167,7 @@ def main(**kwargs):
                 cond=None,
                 split="train",
             )
-            training_stats.report("Loss Perceptual", loss_p)
+            loss_sums[0] += loss_p.detach().item()
 
             loss_p.backward()
             optimiser.step()
@@ -182,12 +185,12 @@ def main(**kwargs):
                 cond=None,
                 split="train",
             )
-            training_stats.report("Loss Discriminator", loss_d)
+            loss_sums[1] += loss_d.detach().item()
 
             loss_d.backward()
             optimiser_disc.step()
-            
-            print(f"{cur_nimg}, P loss: {loss_p.item()}, D loss: {loss_d.item()}")
+
+        loss_count += 1
 
         # Perform maintenance tasks once per tick.
         cur_nimg += opts.batch
@@ -195,31 +198,17 @@ def main(**kwargs):
         if (not done) and (cur_tick != 0) and (cur_nimg < tick_start_nimg + opts.kimg_per_tick * 1000):
             continue
 
-        # Print status line, accumulating the same information in training_stats.
-        tick_end_time = time.time()
-        fields = []
-        fields += [f"tick {training_stats.report0('Progress/tick', cur_tick):<5d}"]
-        fields += [f"kimg {training_stats.report0('Progress/kimg', cur_nimg / 1e3):<9.1f}"]
-        fields += [f"time {dnnlib.util.format_time(training_stats.report0('Timing/total_sec', tick_end_time - start_time)):<12s}"]
-        fields += [f"sec/tick {training_stats.report0('Timing/sec_per_tick', tick_end_time - tick_start_time):<7.1f}"]
-        fields += [f"sec/kimg {training_stats.report0('Timing/sec_per_kimg', (tick_end_time - tick_start_time) / (cur_nimg - tick_start_nimg) * 1e3):<7.2f}"]
-        fields += [f"maintenance {training_stats.report0('Timing/maintenance_sec', maintenance_time):<6.1f}"]
-        fields += [f"cpumem {training_stats.report0('Resources/cpu_mem_gb', psutil.Process(os.getpid()).memory_info().rss / 2**30):<6.2f}"]
-        fields += [f"gpumem {training_stats.report0('Resources/peak_gpu_mem_gb', torch.cuda.max_memory_allocated(device) / 2**30):<6.2f}"]
-        fields += [f"reserved {training_stats.report0('Resources/peak_gpu_mem_reserved_gb', torch.cuda.max_memory_reserved(device) / 2**30):<6.2f}"]
-        torch.cuda.reset_peak_memory_stats()
+        mean_losses = [value / loss_count for value in loss_sums]
+        metrics_log.write(cur_tick, cur_nimg, *mean_losses)
+        fields = [f'tick {cur_tick}', f'nimgs {cur_nimg}']
+        fields.extend(f'{name} {value:.6g}' for name, value in zip(loss_columns, mean_losses))
         print(' '.join(fields))
+        loss_sums = [0.0] * len(loss_columns)
+        loss_count = 0
 
-        # Save network snapshot.
+        # Save model weights in the format consumed by config.make_vqvae().
         if (state_dump_ticks is not None) and (done or cur_tick % state_dump_ticks == 0) and cur_tick != 0:
-            data = dict(optimizer_state=optimiser.state_dict(), step=cur_nimg, net=net)
-            for key, value in data.items():
-                if isinstance(value, torch.nn.Module):
-                    value = copy.deepcopy(value).eval().requires_grad_(False)
-                    data[key] = value.cpu()
-                del value # conserve memory
-            with open(os.path.join(run_dir, f'training-state-{cur_nimg//1000:06d}.pkl'), 'wb') as f:
-                pickle.dump(data, f)
+            save_state_dict(net, os.path.join(run_dir, f'training-state-{cur_nimg//1000:06d}.pth'))
             net.eval()
             # with torch.no_grad():
             eval_metrics = {} # "quant_loss": 0, "recon_loss": 0, "percept_loss": 0}
@@ -264,23 +253,15 @@ def main(**kwargs):
             net.train()
             with open(os.path.join(run_dir, f'training-state-{cur_nimg//1000:06d}.json'), 'w') as f:
                 json.dump(eval_metrics, f, indent=2)
-            del data # conserve memory
-
-        # Update logs.
-        training_stats.default_collector.update()
-        if stats_jsonl is None:
-            stats_jsonl = open(os.path.join(run_dir, 'stats.jsonl'), 'at')
-        stats_jsonl.write(json.dumps(dict(training_stats.default_collector.as_dict(), timestamp=time.time())) + '\n')
-        stats_jsonl.flush()
 
         # Update state.
         cur_tick += 1
         tick_start_nimg = cur_nimg
-        tick_start_time = time.time()
-        maintenance_time = tick_start_time - tick_end_time
         if done:
-            print('Aborting...')
+            print('Done!')
             break
+
+    metrics_log.file.close()
 
 
 if __name__ == "__main__":

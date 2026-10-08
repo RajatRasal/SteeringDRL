@@ -2,7 +2,6 @@ from functools import partial
 import os
 import json
 import math
-import pickle
 from pathlib import Path
 from typing import Callable
 
@@ -401,13 +400,13 @@ def make_encoder(config):
 
 
 VQVAE_CKPT_PATHS = {
-    # 'shapes3d': 'ckpts/vqvae/2_shapes3d_True_32_128_5e-05/training-state-030000.pkl',
-    # 'mpi3d': 'ckpts/vqvae/0_mpi3d_True_32_128_5e-05/training-state-030000.pkl',
-    # 'cars3d': 'ckpts/vqvae/0_cars3d_True_32_128_5e-05/training-state-030000.pkl',
+    # 'shapes3d': 'ckpts/vqvae/2_shapes3d_True_32_128_5e-05/training-state-030000.pth',
+    # 'mpi3d': 'ckpts/vqvae/0_mpi3d_True_32_128_5e-05/training-state-030000.pth',
+    # 'cars3d': 'ckpts/vqvae/0_cars3d_True_32_128_5e-05/training-state-030000.pth',
 
-    'shapes3d': 'ckpts/vqvae/0_shapes3d_True_32_128_5e-05_new/training-state-150000.pkl',
-    'mpi3d': 'ckpts/vqvae/0_mpi3d_True_32_128_5e-05_new/training-state-150000.pkl',
-    'cars3d': 'ckpts/vqvae/0_cars3d_True_32_128_5e-05_new/training-state-150000.pkl',
+    'shapes3d': 'ckpts/vqvae/0_shapes3d_True_32_128_5e-05_new/training-state-150000.pth',
+    'mpi3d': 'ckpts/vqvae/0_mpi3d_True_32_128_5e-05_new/training-state-150000.pth',
+    'cars3d': 'ckpts/vqvae/0_cars3d_True_32_128_5e-05_new/training-state-150000.pth',
 
     'clevrtex': 'ckpts/vqvae/clevrtex/vqvae_clevrtex_params-res128.pth',
     'coco': 'ckpts/vqvae/coco/vqvae_coco_params-res224.pth',
@@ -423,11 +422,23 @@ def make_vqvae(config):
         path = VQVAE_CKPT_PATHS[dataset]
     print(f"VQ-VAE checkpoint: {path}")
     if dataset in ['shapes3d', 'mpi3d', 'cars3d']:
-        with open(path, "rb") as f:
-            data = pickle.load(f)
-        vqvae = data["net"].eval()
-        for p in vqvae.parameters():
-            p.requires_grad_(False)
+        ckpt = torch.load(path, map_location='cpu', weights_only=True)
+        vqvae = VQVAE(
+            enc_dec_dict=dict(
+                resolution=64,
+                in_channels=3,
+                z_channels=3,
+                ch=32,
+                ch_mult=[1, 2, 4],
+                num_res_blocks=2,
+                attn_resolutions=[],
+                out_ch=3,
+                dropout=0.0,
+            ),
+            vq_dict=dict(n_embed=2048, embed_dim=3),
+        )
+        vqvae.load_state_dict(ckpt, strict=True)
+        vqvae.eval().requires_grad_(False)
     else:        
         ckpt = torch.load(path, map_location='cpu')
         vqvae = VQVAE(
