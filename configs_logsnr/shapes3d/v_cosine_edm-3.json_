@@ -32,10 +32,13 @@
         "type": "image",
         "internal_dim": 128,
         "context_dim": 16,
-        "latent_units": 10
+        "latent_units": 10,
+        "legacy_resblocks": true
     },
     "dataset": {
-        "type": "shapes3d"
+        "type": "shapes3d",
+        "vqvae_checkpoint": "ckpts/vqvae/2_shapes3d_True_32_128_5e-05/training-state-030000.pkl",
+        "vqvae_scale_factor": false
     },
     "optimizer": {
         "type": "adamw",

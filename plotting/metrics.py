@@ -25,7 +25,7 @@ import seaborn as sns
 # ROOT = "ckpts/ocl-test"
 # ROOT = "ckpts/final/voc"
 # ROOT = "ckpts/final/coco"
-# ROOT = "ckpts/final/shapes3d"
+ROOT = "ckpts/final/shapes3d"
 # ROOT = "ckpts/final/cars3d"
 # ROOT = "ckpts/final/mpi3d"
 
@@ -35,9 +35,11 @@ import seaborn as sns
 
 # ROOT = "ckpts/paper/shapes3d"
 # ROOT = "ckpts/paper/cars3d"
-ROOT = "ckpts/paper/mpi3d"
+# ROOT = "ckpts/paper/mpi3d"
 
-METRICS = ["dci", "factorvae", "mig", "lpips"]
+# ROOT = "ckpts/ocl-test"
+
+METRICS = ["lpips", "dci", "factorvae", "mig"]
 # METRICS = ["ari", "fari", "miou", "mbo", "lpips"] # "mse", "lpips"]
 # METRICS = ["fari", "miou", "mbo", "lpips"] # "mse", "lpips"]
 # METRICS = ["ari", "fari", "miou", "mbo", "smbo", "lpips"] # "mse", "lpips"]

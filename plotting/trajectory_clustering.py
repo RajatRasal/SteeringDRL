@@ -13,7 +13,7 @@ from typing import Dict, List, Optional, Tuple
 sns.set_theme(style="whitegrid", context="talk")
 sns.set_palette("tab10")
 
-path = "ckpts/paper/clevrtex"
+# path = "ckpts/paper/clevrtex"
 model_names = ["test0", "sigmoid_resunet_bw3_gr_unnorm"]
 # model_names = ["test0", "sigmoid_resunet_bw3_gr_ws2"]
 # model_names = ["test0", "sigmoid_resunet_bw3_gr_ws3"]
@@ -28,14 +28,21 @@ model_names = ["test0", "SIGMOID_resunet_bw3_gr2"]
 # model_names = ["test0_unnorm", "SIGMOID_resunet_bw5_gr_unnorm"]
 # model_names = ["test0", "SIGMOID_resunet_bw3_gr_unnorm"]
 
+path = "ckpts/ocl-test"
+model_names = ["test0", "test4"]
+
 metrics = {}
 
 for folder in os.listdir(path):
-    model = folder[2:]
+    # model = folder[2:]
+    model = folder[1:]
     if model not in metrics:
         metrics[model] = []
-
-    df = pd.read_csv(os.path.join(path, folder, "metrics.csv"))
+    
+    try:
+        df = pd.read_csv(os.path.join(path, folder, "metrics.csv"))
+    except FileNotFoundError:
+        continue
     metrics[model].append({
         "nimgs": df.nimgs.values,
         "LPIPS": df.lpips.values,
@@ -77,11 +84,11 @@ fig, axes = plt.subplots(
 axes[2].set_axis_off()
 axes[5].set_axis_off()
 
-p_marker = 0
+p_marker = 3
 
 for i, (metric, lb, ub, ymin, ymax, xy, xytext) in enumerate([
     ("FG-ARI", 0.6, 0.8, 0.0, 0.9, (0.28, 0.85), (0.5, 0.55)),
-    ("mIoU", 0.5, 0.65, 0.0, 0.7, (0.28, 0.6), (0.5, 0.38)),
+    ("mIoU", 0.5, 0.65, 0.0, 0.8, (0.28, 0.6), (0.5, 0.38)),
     ("mBO", 0.5, 0.7, 0.0, 0.75, (0.28, 0.6), (0.5, 0.38))
 ]):
     ax = axes[i * 3]
@@ -94,10 +101,10 @@ for i, (metric, lb, ub, ymin, ymax, xy, xytext) in enumerate([
         linestyle = model_styles.get(model, "-")
 
         for vals in metrics[model]:
-            # x_smooth = smooth_curve(vals["LPIPS"])
-            # y_smooth = smooth_curve(vals[metric])
-            x_smooth = vals["LPIPS"]
-            y_smooth = vals[metric]
+            x_smooth = smooth_curve(vals["LPIPS"])
+            y_smooth = smooth_curve(vals[metric])
+            # x_smooth = vals["LPIPS"]
+            # y_smooth = vals[metric]
 
             ax.plot(
                 x_smooth,

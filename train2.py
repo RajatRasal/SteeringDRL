@@ -465,9 +465,9 @@ def main():
     if evaluate_enabled:
         extractor = lpips.LPIPS(net='vgg').to(device).to(torch.float32)
         if encoder_config['type'] == 'slot':
-            metrics = ['nimgs', 'time', 'loss', 'mse', 'lpips', 'ari', 'fari', 'miou', 'fmiou', 'mbo'] # , 'importance_sim']
+            metrics = ['nimgs', 'time', 'loss', 'mse', 'lpips', 'ari', 'fari', 'miou', 'fmiou', 'mbo']
         else:
-            metrics = ['nimgs', 'time', 'loss', 'mse', 'lpips', 'dci', 'factorvae', 'mig', 'betavae'] #, 'importance_sim']
+            metrics = ['nimgs', 'time', 'loss', 'mse', 'lpips', 'dci', 'factorvae', 'mig', 'betavae']
         metrics_log = K.utils.CSVLogger(str(run_dir / 'metrics.csv'), metrics)
 
     debug_log_enabled = args.debug_log_every > 0
@@ -683,13 +683,6 @@ def main():
         lpips = lpips / len(dl)
         tqdm.write(f'MSE: {mse.item():g}, LPIPS: {lpips.item():g}')
 
-        # importance_sim = importance_monitor.similarity()
-        # importance_monitor.plot(
-        #     normalise_max=True,
-        #     filename=str(images_dir / f'{args.name}_importance_sim_{nimgs:08}.png')
-        # )
-        # importance_monitor.reset()
-
         if encoder_config['type'].startswith('image'):
             dis_metrics = K.evaluation.evaluate_disentanglement(
                 encoder_ema,
@@ -723,14 +716,12 @@ def main():
             mse.item(),
             lpips.item(),
             *dis_metrics.values(),
-            # importance_sim,
         )
         if use_wandb:
             wandb.log(
                 {
                     'MSE': mse.item(),
                     'LPIPS': lpips.item(),
-                    # 'ImportanceSimilarity': importance_sim,
                     **dis_metrics,
                 },
                 step=nimgs,
@@ -769,22 +760,6 @@ def main():
 
     losses_since_last_print = []
     training_generator = torch.Generator().manual_seed(args.training_seed)
-
-    def mae_similarity(emp: torch.Tensor, target: torch.Tensor) -> float:
-        """
-        Mean Absolute Error between two 1D tensors.
-        Assumes both are sum-normalised densities.
-        """
-        return float((emp - target).abs().mean().item())
-
-    # importance_monitor = K.external2.ImportanceWeightMonitor(
-    #     lambda_min=model_config['lambda_min'],
-    #     lambda_max=model_config['lambda_max'],
-    #     num_bins=20000,
-    #     weight_fn=weighting_fn,
-    #     similarity_fn=mae_similarity,
-    #     device=device,
-    # )
 
     def get_all_cross_attn_params(model) -> List:
         params = []
@@ -835,7 +810,6 @@ def main():
                     weighting_fn,
                     noise_schedule,
                     training_generator,
-                    None, # importance_monitor,
                     **extra_args,
                 )
 
@@ -928,19 +902,3 @@ def main():
 
     except KeyboardInterrupt:
         pass
-
-
-if __name__ == '__main__':
-    main()
-    """
-    models = [
-    ("cosine_sech", "A"),
-    ("cosine_sigmoid_improved9_band9", "B"),
-    ("cosine_sigmoid_improved9_skip4", "C"),
-    ("cosine_sigmoid_improved9_skip5", "D"),
-    ("cosine_sigmoid_improved9_skip_res8", "E"),
-    ("cosine_sigmoid_improved9_skip_res9", "F"),
-    ("cosine_sigmoid_improved9_skip_res12_resunet3", "G"),
-    ("cosine_sigmoid_improved9_skip_res12_resunet12", "H"),
-    ]
-    """

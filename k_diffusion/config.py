@@ -569,14 +569,6 @@ def make_lambda_noise_schedule(config):
         widening_steps=widening_steps,
     )
 
-    # if ns_config['type'] == 'cosine':
-    #     ns = external2.CosineSchedule(shift, lambda_min, lambda_max)
-    # elif ns_config['type'] == 'edm':
-    #     ns = external2.EDMTrainingSchedule(shift, lambda_min, lambda_max)
-    # else:
-    #     raise ValueError('Unknown lambda noise schedule')
-    # return ns
-
 
 class DynamicBandWeighting:
     """
