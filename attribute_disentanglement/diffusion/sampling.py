@@ -1,6 +1,6 @@
 import torch
 
-from . import utils
+from attribute_disentanglement.diffusion import utils
 
 
 def sample_ddim_lambda(model, noise, noise_schedule, steps, eta=1.0, clamp=False, extra_args={}):

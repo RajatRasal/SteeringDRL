@@ -1,0 +1,3 @@
+from spatial_disentanglement.SlotDiffusion.slotdiffusion.vp_vqa.datasets import build_dataset
+from spatial_disentanglement.SlotDiffusion.slotdiffusion.vp_vqa.models import build_model
+from spatial_disentanglement.SlotDiffusion.slotdiffusion.vp_vqa.method import build_method

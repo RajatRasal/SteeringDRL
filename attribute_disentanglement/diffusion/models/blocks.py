@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from . import layers
+from attribute_disentanglement.diffusion.models import layers
 
 
 def orthogonal_(module):

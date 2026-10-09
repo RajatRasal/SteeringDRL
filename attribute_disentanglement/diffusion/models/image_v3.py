@@ -2,9 +2,9 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from . import layers
-from .. import utils
-from .blocks import DBlock, UBlock, BottleneckBlock, MappingNet
+from attribute_disentanglement.diffusion.models import layers
+from attribute_disentanglement.diffusion import utils
+from attribute_disentanglement.diffusion.models.blocks import DBlock, UBlock, BottleneckBlock, MappingNet
 
 
 class ImageDenoiserModelV3(nn.Module):

@@ -4,7 +4,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from .. import utils
+from attribute_disentanglement.diffusion import utils
 
 
 # Residual blocks

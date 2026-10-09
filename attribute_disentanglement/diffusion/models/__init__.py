@@ -1,5 +1,5 @@
-from . import layers
-from .image_v3 import ImageDenoiserModelV3
-from .image_v4 import ImageDenoiserModelV4
-from .image_v5 import ImageDenoiserModelV5
-from .encoder import ImageEncoder, ImprovedImageEncoder, ImprovedImageEncoder2, LabelEncoder
+from attribute_disentanglement.diffusion.models import layers
+from attribute_disentanglement.diffusion.models.image_v3 import ImageDenoiserModelV3
+from attribute_disentanglement.diffusion.models.image_v4 import ImageDenoiserModelV4
+from attribute_disentanglement.diffusion.models.image_v5 import ImageDenoiserModelV5
+from attribute_disentanglement.diffusion.models.encoder import ImageEncoder, ImprovedImageEncoder, ImprovedImageEncoder2, LabelEncoder

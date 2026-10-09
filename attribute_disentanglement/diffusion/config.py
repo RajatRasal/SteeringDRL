@@ -9,7 +9,7 @@ from jsonmerge import merge
 import torch
 from torch.distributions import Normal
 
-from . import models, noise_schedules, reparameterisations, utils
+from attribute_disentanglement.diffusion import models, noise_schedules, reparameterisations, utils
 from attribute_disentanglement.datasets import named_data
 from attribute_disentanglement.vqvae.VQVAE import VQVAE, VQVAEWrapper
 

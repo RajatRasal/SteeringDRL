@@ -1,0 +1,3 @@
+from spatial_disentanglement.SlotDiffusion.slotdiffusion.video_based.datasets import build_dataset
+from spatial_disentanglement.SlotDiffusion.slotdiffusion.video_based.models import build_model
+from spatial_disentanglement.SlotDiffusion.slotdiffusion.video_based.method import build_method

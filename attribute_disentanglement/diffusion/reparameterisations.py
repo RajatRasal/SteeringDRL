@@ -4,8 +4,8 @@ from typing import Callable
 import torch
 from torch import nn
 
-from . import utils
-from .noise_schedules import BandWideningNoiseSchedule
+from attribute_disentanglement.diffusion import utils
+from attribute_disentanglement.diffusion.noise_schedules import BandWideningNoiseSchedule
 
 
 class BaseLogSNRDenoiser(ABC, nn.Module):

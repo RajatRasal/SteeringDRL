@@ -8,9 +8,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import einsum, rearrange, repeat
 
-from .blocks import MappingNet
+from attribute_disentanglement.diffusion.models.blocks import MappingNet
 from attribute_disentanglement.diffusion import utils
-from .layers import FourierFeatures, Erf, Atan
+from attribute_disentanglement.diffusion.models.layers import FourierFeatures, Erf, Atan
 
 
 def timestep_embedding(timesteps, dim, max_period=10000, repeat_only=False):

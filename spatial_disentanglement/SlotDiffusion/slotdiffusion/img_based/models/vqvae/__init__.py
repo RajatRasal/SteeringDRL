@@ -1,0 +1,1 @@
+from spatial_disentanglement.SlotDiffusion.slotdiffusion.video_based.models.vqvae import VQVAE, VQVAEWrapper
