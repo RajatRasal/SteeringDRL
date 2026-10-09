@@ -1,5 +1,4 @@
-from . import flops
-from .flags import checkpointing, get_checkpointing
+from . import layers
 from .image_v3 import ImageDenoiserModelV3
 from .image_v4 import ImageDenoiserModelV4
 from .image_v5 import ImageDenoiserModelV5

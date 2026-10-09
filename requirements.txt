@@ -9,8 +9,6 @@ safetensors
 scikit-image
 scipy
 torch>=2.1
-torchdiffeq
-torchsde
 torchvision
 tqdm
 wandb

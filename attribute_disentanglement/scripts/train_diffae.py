@@ -166,8 +166,6 @@ def main():
                                 formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     p.add_argument('--batch-size', type=int, default=64,
                    help='the batch size')
-    p.add_argument('--checkpointing', action='store_true',
-                   help='enable gradient checkpointing')
     p.add_argument('--compile', action='store_true',
                    help='compile the model')
     p.add_argument('--config', type=str, required=True,
@@ -372,7 +370,7 @@ def main():
         )
     dataset_obj = named_data.get_named_ground_truth_data(dataset_config['type'])
 
-    with torch.no_grad(), K.models.flops.flop_counter() as fc:
+    with torch.no_grad():
         x = torch.zeros([1, model_config['input_channels'], size[0] * 4, size[1] * 4], device=device)
         if encoder_config['type'].startswith('image'):
             conds = encoder(x)
@@ -386,7 +384,6 @@ def main():
         extra_args = {'cross_cond': conds, 'cross_cond_padding': torch.zeros_like(conds[..., 0], dtype=torch.bool)}
         out = inner_model(x_latent, logsnr, **extra_args)
         assert list(out.shape) == [1, model_config['input_channels'], size[0], size[1]]
-        print(f'Forward pass GFLOPs: {fc.flops / 1_000_000_000:,.3f}', flush=True)
 
     if use_wandb:
         wandb.watch(inner_model)
@@ -710,7 +707,7 @@ def main():
     def get_all_cross_attn_params(model) -> List:
         params = []
         for module in model.modules():
-            if isinstance(module, K.layers.CrossAttention2d) or isinstance(module, K.layers.CrossAttention2dReZero):
+            if isinstance(module, K.models.layers.CrossAttention2d) or isinstance(module, K.models.layers.CrossAttention2dReZero):
                 for p in module.parameters():
                     if p.requires_grad:
                         params.append(p)
@@ -733,28 +730,27 @@ def main():
             else:
                 start_timer = time.time()
 
-            with K.models.checkpointing(args.checkpointing):
-                if encoder_config['type'].startswith('image'):
-                    conds = encoder(reals)
-                elif encoder_config['type'] == 'label':
-                    conds = encoder(factors)
-                else:
-                    raise NotImplementedError()
-                extra_args = {
-                    'cross_cond': conds,
-                    'cross_cond_padding': torch.zeros_like(conds[..., 0], dtype=torch.bool),
-                }
+            if encoder_config['type'].startswith('image'):
+                conds = encoder(reals)
+            elif encoder_config['type'] == 'label':
+                conds = encoder(factors)
+            else:
+                raise NotImplementedError()
+            extra_args = {
+                'cross_cond': conds,
+                'cross_cond_padding': torch.zeros_like(conds[..., 0], dtype=torch.bool),
+            }
 
-                with torch.no_grad():
-                    reals = vqvae.encode(reals)
+            with torch.no_grad():
+                reals = vqvae.encode(reals)
 
-                losses = model.loss(
-                    reals,
-                    weighting_fn,
-                    noise_schedule,
-                    training_generator,
-                    **extra_args,
-                )
+            losses = model.loss(
+                reals,
+                weighting_fn,
+                noise_schedule,
+                training_generator,
+                **extra_args,
+            )
 
             loss = losses.mean()
             loss.backward()

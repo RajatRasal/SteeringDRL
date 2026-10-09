@@ -1,9 +1,9 @@
 import torch as th
 import torch.nn as nn
 
-from attribute_disentanglement.diffusion.models.unet_blocks import MappingNet
+from .blocks import MappingNet
 from attribute_disentanglement.diffusion import utils
-from attribute_disentanglement.diffusion.layers import FourierFeatures, Erf, Atan
+from .layers import FourierFeatures, Erf, Atan
 from attribute_disentanglement.diffusion.models.image_v4 import (
     Downsample,
     Upsample,

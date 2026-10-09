@@ -3,15 +3,14 @@ from inspect import isfunction
 import math
 
 import torch
-import numpy as np
 import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import einsum, rearrange, repeat
 
-from attribute_disentanglement.diffusion.models.unet_blocks import MappingNet
+from .blocks import MappingNet
 from attribute_disentanglement.diffusion import utils
-from attribute_disentanglement.diffusion.layers import FourierFeatures, Erf, Atan
+from .layers import FourierFeatures, Erf, Atan
 
 
 def timestep_embedding(timesteps, dim, max_period=10000, repeat_only=False):
@@ -626,26 +625,6 @@ class ResBlock(TimestepBlock):
             h = h + emb_out
             h = self.out_layers(h)
         return self.skip_connection(x) + h
-
-
-def count_flops_attn(model, _x, y):
-    """
-    A counter for the `thop` package to count the operations in an
-    attention operation.
-    Meant to be used like:
-        macs, params = thop.profile(
-            model,
-            inputs=(inputs, timestamps),
-            custom_ops={QKVAttention: QKVAttention.count_flops},
-        )
-    """
-    b, c, *spatial = y[0].shape
-    num_spatial = int(np.prod(spatial))
-    # We perform two matmuls with the same number of ops.
-    # The first computes the weight matrix, the second computes
-    # the combination of the value vectors.
-    matmul_ops = 2 * b * (num_spatial ** 2) * c
-    model.total_ops += th.DoubleTensor([matmul_ops])
 
 
 class ImageDenoiserModelV4(nn.Module):

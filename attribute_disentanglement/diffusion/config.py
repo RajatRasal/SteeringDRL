@@ -9,7 +9,7 @@ from jsonmerge import merge
 import torch
 from torch.distributions import Normal
 
-from . import models, utils, external2
+from . import models, noise_schedules, reparameterisations, utils
 from attribute_disentanglement.datasets import named_data
 from attribute_disentanglement.vqvae.VQVAE import VQVAE, VQVAEWrapper
 
@@ -273,57 +273,12 @@ def make_denoiser_wrapper(config):
         if has_variance:
             raise ValueError('VDMpp config does not support a variance output')
         if loss_config == 'vdmpp_eps':
-            return external2.EpsPredictionDenoiser
+            return reparameterisations.EpsPredictionDenoiser
         elif loss_config == 'vdmpp_x':
-            return external2.XPredictionDenoiser
+            return reparameterisations.XPredictionDenoiser
         elif loss_config == 'vdmpp_v':
-            return external2.VPredictionDenoiser
+            return reparameterisations.VPredictionDenoiser
     raise ValueError('Unknown loss config type')
-
-
-def make_sample_density(config):
-    sd_config = config['sigma_sample_density']
-    sigma_data = config['sigma_data']
-    if sd_config['type'] == 'lognormal':
-        loc = sd_config['mean'] if 'mean' in sd_config else sd_config['loc']
-        scale = sd_config['std'] if 'std' in sd_config else sd_config['scale']
-        return partial(utils.rand_log_normal, loc=loc, scale=scale)
-    if sd_config['type'] == 'loglogistic':
-        loc = sd_config['loc'] if 'loc' in sd_config else math.log(sigma_data)
-        scale = sd_config['scale'] if 'scale' in sd_config else 0.5
-        min_value = sd_config['min_value'] if 'min_value' in sd_config else 0.
-        max_value = sd_config['max_value'] if 'max_value' in sd_config else float('inf')
-        return partial(utils.rand_log_logistic, loc=loc, scale=scale, min_value=min_value, max_value=max_value)
-    if sd_config['type'] == 'loguniform':
-        min_value = sd_config['min_value'] if 'min_value' in sd_config else config['sigma_min']
-        max_value = sd_config['max_value'] if 'max_value' in sd_config else config['sigma_max']
-        return partial(utils.rand_log_uniform, min_value=min_value, max_value=max_value)
-    if sd_config['type'] in {'v-diffusion', 'cosine'}:
-        min_value = sd_config['min_value'] if 'min_value' in sd_config else 1e-3
-        max_value = sd_config['max_value'] if 'max_value' in sd_config else 1e3
-        return partial(utils.rand_v_diffusion, sigma_data=sigma_data, min_value=min_value, max_value=max_value)
-    if sd_config['type'] == 'split-lognormal':
-        loc = sd_config['mean'] if 'mean' in sd_config else sd_config['loc']
-        scale_1 = sd_config['std_1'] if 'std_1' in sd_config else sd_config['scale_1']
-        scale_2 = sd_config['std_2'] if 'std_2' in sd_config else sd_config['scale_2']
-        return partial(utils.rand_split_log_normal, loc=loc, scale_1=scale_1, scale_2=scale_2)
-    if sd_config['type'] == 'cosine-interpolated':
-        min_value = sd_config.get('min_value', min(config['sigma_min'], 1e-3))
-        max_value = sd_config.get('max_value', max(config['sigma_max'], 1e3))
-        image_d = sd_config.get('image_d', max(config['input_size']))
-        noise_d_low = sd_config.get('noise_d_low', 32)
-        noise_d_high = sd_config.get('noise_d_high', max(config['input_size']))
-        return partial(
-            utils.rand_cosine_interpolated,
-            image_d=image_d,
-            noise_d_low=noise_d_low,
-            noise_d_high=noise_d_high,
-            sigma_data=sigma_data,
-            min_value=min_value,
-            max_value=max_value,
-        )
-
-    raise ValueError('Unknown sample density type')
 
 
 def make_lambda_noise_schedule(config):
@@ -338,8 +293,8 @@ def make_lambda_noise_schedule(config):
     sigma = ns_config.get('sigma', 2.4)
 
     schedules = {
-        'cosine': external2.CosineSchedule,
-        'edm': partial(external2.EDMTrainingSchedule, mu=mu, sigma=sigma),
+        'cosine': noise_schedules.CosineSchedule,
+        'edm': partial(noise_schedules.EDMTrainingSchedule, mu=mu, sigma=sigma),
     }
     return schedules[ns_config['type']](
         shift=shift,

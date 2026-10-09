@@ -3,17 +3,13 @@ import hashlib
 import math
 from pathlib import Path
 import shutil
-import threading
 import urllib
 import warnings
 from typing import Tuple, Union
 
-from PIL import Image
 import safetensors
 import torch
 from torch import nn, optim
-from torch.utils import data
-from torchvision.transforms import functional as TF
 
 
 def normalise(x):
@@ -22,30 +18,6 @@ def normalise(x):
 
 def unnormalise(x):
     return (x + 1) * 0.5
-
-
-def from_pil_image(x):
-    """Converts from a PIL image to a tensor."""
-    x = TF.to_tensor(x)
-    if x.ndim == 2:
-        x = x[..., None]
-    return x * 2 - 1
-
-
-def to_pil_image(x):
-    """Converts from a tensor to a PIL image."""
-    if x.ndim == 4:
-        assert x.shape[0] == 1
-        x = x[0]
-    if x.shape[0] == 1:
-        x = x[0]
-    return TF.to_pil_image((x.clamp(-1, 1) + 1) / 2)
-
-
-def hf_datasets_augs_helper(examples, transform, image_key, mode='RGB'):
-    """Apply passed in transforms for HuggingFace Datasets."""
-    images = [transform(image.convert(mode)) for image in examples[image_key]]
-    return {image_key: images}
 
 
 def append_dims(x, target_dims):
@@ -389,175 +361,6 @@ class CosineAnnealingWarmupRestarts(optim.lr_scheduler._LRScheduler):
         for param_group, lr in zip(self.optimizer.param_groups, self.get_lr()):
             param_group['lr'] = lr
 
-
-
-def stratified_uniform(shape, group=0, groups=1, dtype=None, device=None):
-    """Draws stratified samples from a uniform distribution."""
-    if groups <= 0:
-        raise ValueError(f"groups must be positive, got {groups}")
-    if group < 0 or group >= groups:
-        raise ValueError(f"group must be in [0, {groups})")
-    n = shape[-1] * groups
-    offsets = torch.arange(group, n, groups, dtype=dtype, device=device)
-    u = torch.rand(shape, dtype=dtype, device=device)
-    return (offsets + u) / n
-
-
-stratified_settings = threading.local()
-
-
-@contextmanager
-def enable_stratified(group=0, groups=1, disable=False):
-    """A context manager that enables stratified sampling."""
-    try:
-        stratified_settings.disable = disable
-        stratified_settings.group = group
-        stratified_settings.groups = groups
-        yield
-    finally:
-        del stratified_settings.disable
-        del stratified_settings.group
-        del stratified_settings.groups
-
-
-@contextmanager
-def enable_stratified_accelerate(accelerator, disable=False):
-    """A context manager that enables stratified sampling, distributing the strata across
-    all processes and gradient accumulation steps using settings from Hugging Face Accelerate."""
-    try:
-        rank = accelerator.process_index
-        world_size = accelerator.num_processes
-        acc_steps = accelerator.gradient_state.num_steps
-        acc_step = accelerator.step % acc_steps
-        group = rank * acc_steps + acc_step
-        groups = world_size * acc_steps
-        with enable_stratified(group, groups, disable=disable):
-            yield
-    finally:
-        pass
-
-
-def stratified_with_settings(shape, dtype=None, device=None):
-    """Draws stratified samples from a uniform distribution, using settings from a context
-    manager."""
-    if not hasattr(stratified_settings, 'disable') or stratified_settings.disable:
-        return torch.rand(shape, dtype=dtype, device=device)
-    return stratified_uniform(
-        shape, stratified_settings.group, stratified_settings.groups, dtype=dtype, device=device
-    )
-
-
-def rand_log_normal(shape, loc=0., scale=1., device='cpu', dtype=torch.float32):
-    """Draws samples from an lognormal distribution."""
-    u = stratified_with_settings(shape, device=device, dtype=dtype) * (1 - 2e-7) + 1e-7
-    return torch.distributions.Normal(loc, scale).icdf(u).exp()
-
-
-def rand_log_normal_monotonic(shape, loc=0., scale=1., side='left', device='cpu', dtype=torch.float32):
-    """
-    Draw samples from a *one-sided* log-normal-like distribution:
-    log σ ~ loc ± , then σ = exp(log σ).
-
-    side='left'  -> log σ = 
-    side='right' -> log σ = 
-    """
-    # stratified uniform
-    u = stratified_with_settings(shape, device=device, dtype=dtype) * (1 - 2e-7) + 1e-7
-    eps = torch.distributions.Normal(loc, scale).icdf(u)
-
-    if side == 'left':
-        log_sigma = torch.where(eps < loc, loc, eps)
-    elif side == 'right':
-        log_sigma = torch.where(eps > loc, loc, eps)
-    else:
-        raise ValueError(f'side {side} is not valid and must be one of "left" or "right"')
-
-    return log_sigma.exp()
-
-
-def rand_log_logistic(shape, loc=0., scale=1., min_value=0., max_value=float('inf'), device='cpu', dtype=torch.float32):
-    """Draws samples from an optionally truncated log-logistic distribution."""
-    min_value = torch.as_tensor(min_value, device=device, dtype=torch.float64)
-    max_value = torch.as_tensor(max_value, device=device, dtype=torch.float64)
-    min_cdf = min_value.log().sub(loc).div(scale).sigmoid()
-    max_cdf = max_value.log().sub(loc).div(scale).sigmoid()
-    u = stratified_with_settings(shape, device=device, dtype=torch.float64) * (max_cdf - min_cdf) + min_cdf
-    return u.logit().mul(scale).add(loc).exp().to(dtype)
-
-
-def rand_log_uniform(shape, min_value, max_value, device='cpu', dtype=torch.float32):
-    """Draws samples from an log-uniform distribution."""
-    min_value = math.log(min_value)
-    max_value = math.log(max_value)
-    return (stratified_with_settings(shape, device=device, dtype=dtype) * (max_value - min_value) + min_value).exp()
-
-
-def rand_v_diffusion(shape, sigma_data=1., min_value=0., max_value=float('inf'), device='cpu', dtype=torch.float32):
-    """Draws samples from a truncated v-diffusion training timestep distribution."""
-    min_cdf = math.atan(min_value / sigma_data) * 2 / math.pi
-    max_cdf = math.atan(max_value / sigma_data) * 2 / math.pi
-    u = stratified_with_settings(shape, device=device, dtype=dtype) * (max_cdf - min_cdf) + min_cdf
-    return torch.tan(u * math.pi / 2) * sigma_data
-
-
-def rand_cosine_interpolated(shape, image_d, noise_d_low, noise_d_high, sigma_data=1., min_value=1e-3, max_value=1e3, device='cpu', dtype=torch.float32):
-    """Draws samples from an interpolated cosine timestep distribution (from simple diffusion)."""
-
-    def logsnr_schedule_cosine(t, logsnr_min, logsnr_max):
-        t_min = math.atan(math.exp(-0.5 * logsnr_max))
-        t_max = math.atan(math.exp(-0.5 * logsnr_min))
-        return -2 * torch.log(torch.tan(t_min + t * (t_max - t_min)))
-
-    def logsnr_schedule_cosine_shifted(t, image_d, noise_d, logsnr_min, logsnr_max):
-        shift = 2 * math.log(noise_d / image_d)
-        return logsnr_schedule_cosine(t, logsnr_min - shift, logsnr_max - shift) + shift
-
-    def logsnr_schedule_cosine_interpolated(t, image_d, noise_d_low, noise_d_high, logsnr_min, logsnr_max):
-        logsnr_low = logsnr_schedule_cosine_shifted(t, image_d, noise_d_low, logsnr_min, logsnr_max)
-        logsnr_high = logsnr_schedule_cosine_shifted(t, image_d, noise_d_high, logsnr_min, logsnr_max)
-        return torch.lerp(logsnr_low, logsnr_high, t)
-
-    logsnr_min = -2 * math.log(min_value / sigma_data)
-    logsnr_max = -2 * math.log(max_value / sigma_data)
-    u = stratified_with_settings(shape, device=device, dtype=dtype)
-    logsnr = logsnr_schedule_cosine_interpolated(u, image_d, noise_d_low, noise_d_high, logsnr_min, logsnr_max)
-    return torch.exp(-logsnr / 2) * sigma_data
-
-
-def rand_split_log_normal(shape, loc, scale_1, scale_2, device='cpu', dtype=torch.float32):
-    """Draws samples from a split lognormal distribution."""
-    n = torch.randn(shape, device=device, dtype=dtype).abs()
-    u = torch.rand(shape, device=device, dtype=dtype)
-    n_left = n * -scale_1 + loc
-    n_right = n * scale_2 + loc
-    ratio = scale_1 / (scale_1 + scale_2)
-    return torch.where(u < ratio, n_left, n_right).exp()
-
-
-class FolderOfImages(data.Dataset):
-    """Recursively finds all images in a directory. It does not support
-    classes/targets."""
-
-    IMG_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.ppm', '.bmp', '.pgm', '.tif', '.tiff', '.webp'}
-
-    def __init__(self, root, transform=None):
-        super().__init__()
-        self.root = Path(root)
-        self.transform = nn.Identity() if transform is None else transform
-        self.paths = sorted(path for path in self.root.rglob('*') if path.suffix.lower() in self.IMG_EXTENSIONS)
-
-    def __repr__(self):
-        return f'FolderOfImages(root="{self.root}", len: {len(self)})'
-
-    def __len__(self):
-        return len(self.paths)
-
-    def __getitem__(self, key):
-        path = self.paths[key]
-        with open(path, 'rb') as f:
-            image = Image.open(f).convert('RGB')
-        image = self.transform(image)
-        return image,
 
 
 class CSVLogger:
