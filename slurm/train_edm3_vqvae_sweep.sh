@@ -59,7 +59,7 @@ echo "Save every: $save_every steps ($((save_every * 128)) images)"
 echo "Output: ckpts/$exp_name/$run_name"
 nvidia-smi --query-gpu=name,driver_version,compute_cap --format=csv,noheader
 
-python3 train2.py \
+python3 -m attribute_disentanglement.scripts.train2 \
     --name="$run_name" \
     --batch-size=128 \
     --config="$config" \

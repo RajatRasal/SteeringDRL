@@ -42,7 +42,7 @@ if [[ "${6,,}" == "true" ]]; then
     disc_args=(--disc)
 fi
 
-python3 train_vqvae.py \
+python3 -m attribute_disentanglement.scripts.train_vqvae \
     --out-dir=$1 \
     --dataset=$2 \
     --duration=30 \

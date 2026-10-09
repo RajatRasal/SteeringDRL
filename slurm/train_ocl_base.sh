@@ -24,7 +24,7 @@ else:
     print("CUDA not available.")
 PY
 
-python3 train2.py \
+python3 -m attribute_disentanglement.scripts.train2 \
     --name=$1 \
     --batch-size=$2 \
     --config=$3 \
