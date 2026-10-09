@@ -513,12 +513,12 @@ def main():
         axes[1].axis('off')
 
         plt.tight_layout()
-        filename = str(images_dir / f'recon_grid_vp_{nimgs:08}.png')
+        filename = str(images_dir / f'recon_grid_{nimgs:08}.png')
         plt.savefig(filename, bbox_inches='tight')
         plt.close(fig)
 
         if use_wandb:
-            wandb.log({f'recon_grid_vp': wandb.Image(filename)}, nimg=nimgs)
+            wandb.log({'recon_grid': wandb.Image(filename)}, nimg=nimgs)
 
         ######################
 
@@ -563,7 +563,7 @@ def main():
             padding=0,
         )
 
-        filename = str(images_dir / f'{args.name}_edits_grid_vp_{nimgs:08}.png')
+        filename = str(images_dir / f'{args.name}_edits_grid_{nimgs:08}.png')
         plt.imshow(summary_edits_grid.permute(1, 2, 0).cpu().numpy())
         plt.axis('off')
         plt.tight_layout()
@@ -571,7 +571,7 @@ def main():
         plt.close()
 
         if use_wandb:
-            wandb.log({f'edit_grid_vp': wandb.Image(filename)}, nimg=nimgs)
+            wandb.log({'edit_grid': wandb.Image(filename)}, nimg=nimgs)
 
     @torch.no_grad()
     @K.utils.eval_mode(model_ema)

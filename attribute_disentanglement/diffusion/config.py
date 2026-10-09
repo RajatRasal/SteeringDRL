@@ -9,7 +9,7 @@ from jsonmerge import merge
 import torch
 from torch.distributions import Normal
 
-from . import models, utils, external, external2
+from . import models, utils, external2
 from attribute_disentanglement.datasets import named_data
 from attribute_disentanglement.vqvae.VQVAE import VQVAE, VQVAEWrapper
 
@@ -269,18 +269,9 @@ def make_denoiser_wrapper(config):
     config = config['model']
     has_variance = config.get('has_variance', False)
     loss_config = config.get('loss_config', 'vdmpp_v')
-    if loss_config.startswith('vp_'):
-        if has_variance:
-            raise ValueError('VP config does not support a variance output')
-        if loss_config == 'vp_eps':
-            return external.ContinuousEpsDDPMDenoiser
-        elif loss_config == 'vp_v':
-            return external.ContinuousVDDPMDenoiser
-        elif loss_config == 'vp_x':
-            return external.ContinuousXDDPMDenoiser
     if loss_config.startswith('vdmpp_'):
         if has_variance:
-            raise ValueError('VP config does not support a variance output')
+            raise ValueError('VDMpp config does not support a variance output')
         if loss_config == 'vdmpp_eps':
             return external2.EpsPredictionDenoiser
         elif loss_config == 'vdmpp_x':
