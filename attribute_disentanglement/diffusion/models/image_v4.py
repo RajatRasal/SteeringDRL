@@ -9,7 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import einsum, rearrange, repeat
 
-from attribute_disentanglement.diffusion.models.image_v2 import MappingNet
+from attribute_disentanglement.diffusion.models.unet_blocks import MappingNet
 from attribute_disentanglement.diffusion import utils
 from attribute_disentanglement.diffusion.layers import FourierFeatures, Erf, Atan
 

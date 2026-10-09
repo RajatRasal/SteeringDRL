@@ -9,28 +9,15 @@ from jsonmerge import merge
 import torch
 from torch.distributions import Normal
 
-from . import augmentation, layers, models, utils, external, external2
+from . import models, utils, external, external2
 from attribute_disentanglement.datasets import named_data
 from attribute_disentanglement.vqvae.VQVAE import VQVAE, VQVAEWrapper
 
 
-def round_to_power_of_two(x, tol):
-    approxs = []
-    for i in range(math.ceil(math.log2(x))):
-        mult = 2**i
-        approxs.append(round(x / mult) * mult)
-    for approx in reversed(approxs):
-        error = abs((approx - x) / x)
-        if error <= tol:
-            return approx
-    return approxs[0]
-
-
 def load_config(path_or_dict):
-    defaults_image_v1 = {
+    defaults_image_v3 = {
         'model': {
             'patch_size': 1,
-            'augment_wrapper': True,
             'mapping_cond_dim': 0,
             'unet_cond_dim': 0,
             'cross_cond_dim': 0,
@@ -46,51 +33,11 @@ def load_config(path_or_dict):
             'weight_decay': 1e-3,
         },
     }
-    defaults_image_transformer_v1 = {
-        'model': {
-            'd_ff': 0,
-            'augment_wrapper': False,
-            'skip_stages': 0,
-            'has_variance': False,
-        },
-        'optimizer': {
-            'type': 'adamw',
-            'lr': 5e-4,
-            'betas': [0.9, 0.99],
-            'eps': 1e-8,
-            'weight_decay': 1e-4,
-        },
-    }
-    defaults_image_transformer_v2 = {
-        'model': {
-            'mapping_width': 256,
-            'mapping_depth': 2,
-            'mapping_d_ff': None,
-            'mapping_cond_dim': 0,
-            'mapping_dropout_rate': 0.,
-            'd_ffs': None,
-            'self_attns': None,
-            'dropout_rate': None,
-            'augment_wrapper': False,
-            'skip_stages': 0,
-            'has_variance': False,
-        },
-        'optimizer': {
-            'type': 'adamw',
-            'lr': 5e-4,
-            'betas': [0.9, 0.99],
-            'eps': 1e-8,
-            'weight_decay': 1e-4,
-        },
-    }
     defaults = {
         'model': {
             'sigma_data': 1.,
             'dropout_rate': 0.,
-            'augment_prob': 0.,
-            'loss_config': 'karras',
-            'loss_weighting': 'karras',
-            'loss_scales': 1,
+            'loss_config': 'vdmpp_v',
         },
         'dataset': {
             'type': 'shapes3d',
@@ -123,33 +70,15 @@ def load_config(path_or_dict):
             config = json.loads(file.read_text())
     else:
         config = path_or_dict
-    if config['model']['type'] in ['image_v1', 'image_v2', 'image_v3']:
-        config = merge(defaults_image_v1, config)
-    elif config['model']['type'] == 'image_transformer_v1':
-        config = merge(defaults_image_transformer_v1, config)
-        if not config['model']['d_ff']:
-            config['model']['d_ff'] = round_to_power_of_two(config['model']['width'] * 8 / 3, tol=0.05)
-    elif config['model']['type'] == 'image_transformer_v2':
-        config = merge(defaults_image_transformer_v2, config)
-        if not config['model']['mapping_d_ff']:
-            config['model']['mapping_d_ff'] = config['model']['mapping_width'] * 3
-        if not config['model']['d_ffs']:
-            d_ffs = []
-            for width in config['model']['widths']:
-                d_ffs.append(width * 3)
-            config['model']['d_ffs'] = d_ffs
-        if not config['model']['self_attns']:
-            self_attns = []
-            default_neighborhood = {"type": "neighborhood", "d_head": 64, "kernel_size": 7}
-            default_global = {"type": "global", "d_head": 64}
-            for i in range(len(config['model']['widths'])):
-                self_attns.append(default_neighborhood if i < len(config['model']['widths']) - 1 else default_global)
-            config['model']['self_attns'] = self_attns
-        if config['model']['dropout_rate'] is None:
-            config['model']['dropout_rate'] = [0.0] * len(config['model']['widths'])
-        elif isinstance(config['model']['dropout_rate'], float):
-            config['model']['dropout_rate'] = [config['model']['dropout_rate']] * len(config['model']['widths'])
+    if config['model']['type'] == 'image_v3':
+        config = merge(defaults_image_v3, config)
     config = merge(defaults, config)
+    supported_models = {'image_v3', 'image_v4', 'image_v5'}
+    if config['model']['type'] not in supported_models:
+        raise ValueError(
+            f"Unsupported model {config['model']['type']!r}; "
+            f"choose one of {sorted(supported_models)}"
+        )
     supported_datasets = {'shapes3d', 'cars3d', 'mpi3d'}
     if config['dataset']['type'] not in supported_datasets:
         raise ValueError(
@@ -160,49 +89,8 @@ def load_config(path_or_dict):
 
 
 def make_model(config):
-    dataset_config = config['dataset']
-    num_classes = dataset_config['num_classes']
     config = config['model']
-    if config['type'] == 'image_v1':
-        model = models.ImageDenoiserModelV1(
-            config['input_channels'],
-            config['mapping_out'],
-            config['depths'],
-            config['channels'],
-            config['self_attn_depths'],
-            config['cross_attn_depths'],
-            patch_size=config['patch_size'],
-            dropout_rate=config['dropout_rate'],
-            mapping_cond_dim=config['mapping_cond_dim'] + (9 if config['augment_wrapper'] else 0),
-            unet_cond_dim=config['unet_cond_dim'],
-            cross_cond_dim=config['cross_cond_dim'],
-            skip_stages=config['skip_stages'],
-            has_variance=config['has_variance'],
-        )
-        if config['augment_wrapper']:
-            model = augmentation.KarrasAugmentWrapper(model)
-    elif config['type'] == 'image_v2':
-        model = models.ImageDenoiserModelV2(
-            config['input_channels'],
-            config['mapping_out'],
-            config['depths'],
-            config['channels'],
-            config['self_attn_depths'],
-            config['cross_attn_depths'],
-            patch_size=config['patch_size'],
-            dropout_rate=config['dropout_rate'],
-            mapping_cond_dim=config['mapping_cond_dim'] + (9 if config['augment_wrapper'] else 0),
-            unet_cond_dim=config['unet_cond_dim'],
-            cross_cond_dim=config['cross_cond_dim'],
-            skip_stages=config['skip_stages'],
-            has_variance=config['has_variance'],
-            learned_subsampling=config['learned_subsampling'],
-            up_down_asymmetry=config['up_down_asymmetry'],
-            use_mid_block=config['use_mid_block'],
-        )
-        if config['augment_wrapper']:
-            model = augmentation.KarrasAugmentWrapper(model)
-    elif config['type'] == 'image_v3':
+    if config['type'] == 'image_v3':
         model = models.ImageDenoiserModelV3(
             config['input_channels'],
             config['mapping_out'],
@@ -212,7 +100,7 @@ def make_model(config):
             config['cross_attn_depths'],
             patch_size=config['patch_size'],
             dropout_rate=config['dropout_rate'],
-            mapping_cond_dim=config['mapping_cond_dim'] + (9 if config['augment_wrapper'] else 0),
+            mapping_cond_dim=config['mapping_cond_dim'],
             unet_cond_dim=config['unet_cond_dim'],
             cross_cond_dim=config['cross_cond_dim'],
             skip_stages=config['skip_stages'],
@@ -223,8 +111,6 @@ def make_model(config):
             rezero=config.get('rezero', False),
             init_res_scale=config.get('init_res_scale', 1.0),
         )
-        if config['augment_wrapper']:
-            model = augmentation.KarrasAugmentWrapper(model)
     elif config['type'] == 'image_v4':
         model = models.ImageDenoiserModelV4(
             input_size=config['input_size'],
@@ -278,74 +164,6 @@ def make_model(config):
             trans_residual_init=config.get('trans_residual_init', None),
             trans_residual_constraint=config.get('trans_residual_constraint', 'identity'),
             trans_residual_scale=config.get('trans_residual_scale', 1.),
-        )
-    elif config['type'] == 'image_v6':
-        model = models.ImageDenoiserModelV6(
-            in_channels=config['input_channels'],
-            out_channels=config['out_channels'],
-            model_channels=config['model_channels'],
-            num_res_blocks=config['num_res_blocks'],
-            attention_resolutions=config['attention_resolutions'],
-            channel_mult=config['channel_mult'],
-            dropout=config['dropout'],
-            num_heads=config.get('num_heads', None),
-            num_head_channels=config.get('num_head_channels', None),
-            use_scale_shift_norm=config['use_scale_shift_norm'],
-            resblock_updown=config.get('resblock_updown', True),
-            conv_resample=config.get('conv_resample', False),
-            transformer_depth=config['transformer_depth'],
-            latent_unit=config['latent_units'],
-            context_dim=config['context_dim'],
-            norm_style=config.get('norm_style', False),
-            norm_ctx=config.get('norm_ctx', False),
-            skip_scale=config.get('skip_scale', 'default'),
-            kappa=config.get('kappa', 1.0),
-            skip_residual_init=config.get('skip_residual_init', None),
-            skip_residual_constraint=config.get('skip_residual_constraint', 'identity'),
-            skip_residual_scale=config.get('skip_residual_scale', 1.),
-            trans_residual_init=config.get('trans_residual_init', None),
-            trans_residual_constraint=config.get('trans_residual_constraint', 'identity'),
-            trans_residual_scale=config.get('trans_residual_scale', 1.),
-        ) 
-    elif config['type'] == 'image_transformer_v1':
-        model = models.ImageTransformerDenoiserModelV1(
-            n_layers=config['depth'],
-            d_model=config['width'],
-            d_ff=config['d_ff'],
-            in_features=config['input_channels'],
-            out_features=config['input_channels'],
-            patch_size=config['patch_size'],
-            num_classes=num_classes + 1 if num_classes else 0,
-            dropout=config['dropout_rate'],
-            sigma_data=config['sigma_data'],
-        )
-    elif config['type'] == 'image_transformer_v2':
-        assert len(config['widths']) == len(config['depths'])
-        assert len(config['widths']) == len(config['d_ffs'])
-        assert len(config['widths']) == len(config['self_attns'])
-        assert len(config['widths']) == len(config['dropout_rate'])
-        levels = []
-        for depth, width, d_ff, self_attn, dropout in zip(config['depths'], config['widths'], config['d_ffs'], config['self_attns'], config['dropout_rate']):
-            if self_attn['type'] == 'global':
-                self_attn = models.image_transformer_v2.GlobalAttentionSpec(self_attn.get('d_head', 64))
-            elif self_attn['type'] == 'neighborhood':
-                self_attn = models.image_transformer_v2.NeighborhoodAttentionSpec(self_attn.get('d_head', 64), self_attn.get('kernel_size', 7))
-            elif self_attn['type'] == 'shifted-window':
-                self_attn = models.image_transformer_v2.ShiftedWindowAttentionSpec(self_attn.get('d_head', 64), self_attn['window_size'])
-            elif self_attn['type'] == 'none':
-                self_attn = models.image_transformer_v2.NoAttentionSpec()
-            else:
-                raise ValueError(f'unsupported self attention type {self_attn["type"]}')
-            levels.append(models.image_transformer_v2.LevelSpec(depth, width, d_ff, self_attn, dropout))
-        mapping = models.image_transformer_v2.MappingSpec(config['mapping_depth'], config['mapping_width'], config['mapping_d_ff'], config['mapping_dropout_rate'])
-        model = models.ImageTransformerDenoiserModelV2(
-            levels=levels,
-            mapping=mapping,
-            in_channels=config['input_channels'],
-            out_channels=config['input_channels'],
-            patch_size=config['patch_size'],
-            num_classes=num_classes + 1 if num_classes else 0,
-            mapping_cond_dim=config['mapping_cond_dim'],
         )
     else:
         raise ValueError(f'unsupported model type {config["type"]}')
@@ -449,20 +267,8 @@ def make_vqvae(config):
 
 def make_denoiser_wrapper(config):
     config = config['model']
-    sigma_data = config.get('sigma_data', 1.)
     has_variance = config.get('has_variance', False)
-    loss_config = config.get('loss_config', 'karras')
-    if loss_config.startswith('karras_'):
-        weighting = config.get('loss_weighting', 'karras')
-        scales = config.get('loss_scales', 1)
-        if has_variance:
-            return partial(layers.DenoiserWithVariance, sigma_data=sigma_data, weighting=weighting)
-        if loss_config == 'karras_x':
-            return partial(layers.SimpleLossXDenoiser, sigma_data=sigma_data, weighting=weighting, scales=scales)
-        elif loss_config == 'karras_eps':
-            return partial(layers.SimpleLossDenoiser, sigma_data=sigma_data, weighting=weighting, scales=scales)
-        elif loss_config == 'karras_f':
-            return partial(layers.Denoiser, sigma_data=sigma_data, weighting=weighting, scales=scales)
+    loss_config = config.get('loss_config', 'vdmpp_v')
     if loss_config.startswith('vp_'):
         if has_variance:
             raise ValueError('VP config does not support a variance output')

@@ -1,129 +1,10 @@
-from functools import lru_cache, reduce
 import math
 
-from dctorch import functional as df
 import torch
 from torch import nn
 from torch.nn import functional as F
 
-from . import sampling, utils
-
-
-# Helper functions
-
-
-def dct(x):
-    if x.ndim == 3:
-        return df.dct(x)
-    if x.ndim == 4:
-        return df.dct2(x)
-    if x.ndim == 5:
-        return df.dct3(x)
-    raise ValueError(f'Unsupported dimensionality {x.ndim}')
-
-
-@lru_cache
-def freq_weight_1d(n, scales=0, dtype=None, device=None):
-    ramp = torch.linspace(0.5 / n, 0.5, n, dtype=dtype, device=device)
-    weights = -torch.log2(ramp)
-    if scales >= 1:
-        weights = torch.clamp_max(weights, scales)
-    return weights
-
-
-@lru_cache
-def freq_weight_nd(shape, scales=0, dtype=None, device=None):
-    indexers = [[slice(None) if i == j else None for j in range(len(shape))] for i in range(len(shape))]
-    weights = [freq_weight_1d(n, scales, dtype, device)[ix] for n, ix in zip(shape, indexers)]
-    return reduce(torch.minimum, weights)
-
-
-# Karras et al. preconditioned denoiser
-
-
-class Denoiser(nn.Module):
-    """A Karras et al. preconditioner for denoising diffusion models."""
-
-    def __init__(self, inner_model, sigma_data=1., weighting='karras', scales=1):
-        super().__init__()
-        self.inner_model = inner_model
-        self.sigma_data = sigma_data
-        self.scales = scales
-        if callable(weighting):
-            self.weighting = weighting
-        if weighting == 'none':
-            self.weighting = torch.ones_like
-        elif weighting == 'karras':
-            self.weighting = self._karras
-        elif weighting == 'soft-min-snr':
-            self.weighting = self._weighting_soft_min_snr
-        elif weighting == 'snr':
-            self.weighting = self._weighting_snr
-        else:
-            raise ValueError(f'Unknown weighting type {weighting}')
-    
-    def _karras(self, sigma):
-        # TODO: Why is _weighting_soft_min_snr the inverse of _karras?
-        # Note: Karras is my implementation of the EDM paper
-        return (sigma ** 2 + self.sigma_data ** 2) / (sigma * self.sigma_data) ** 2
-
-    def _weighting_soft_min_snr(self, sigma):
-        return (sigma * self.sigma_data) ** 2 / (sigma ** 2 + self.sigma_data ** 2) ** 2
-
-    def _weighting_snr(self, sigma):
-        return self.sigma_data ** 2 / (sigma ** 2 + self.sigma_data ** 2)
-
-    def get_scalings(self, sigma):
-        c_skip = self.sigma_data ** 2 / (sigma ** 2 + self.sigma_data ** 2)
-        c_out = sigma * self.sigma_data / (sigma ** 2 + self.sigma_data ** 2) ** 0.5
-        c_in = 1 / (sigma ** 2 + self.sigma_data ** 2) ** 0.5
-        return c_skip, c_out, c_in
-
-    def loss(self, input, noise, sigma, **kwargs):
-        c_skip, c_out, c_in = [utils.append_dims(x, input.ndim) for x in self.get_scalings(sigma)]
-        c_weight = self.weighting(sigma)
-        noised_input = input + noise * utils.append_dims(sigma, input.ndim)
-        model_output = self.inner_model(noised_input * c_in, sigma, **kwargs)
-        target = (input - c_skip * noised_input) / c_out
-        if self.scales == 1:
-            return ((model_output - target) ** 2).flatten(1).mean(1) * c_weight
-        sq_error = dct(model_output - target) ** 2
-        f_weight = freq_weight_nd(sq_error.shape[2:], self.scales, dtype=sq_error.dtype, device=sq_error.device)
-        return (sq_error * f_weight).flatten(1).mean(1) * c_weight
-
-    def forward(self, input, sigma, **kwargs):
-        c_skip, c_out, c_in = [utils.append_dims(x, input.ndim) for x in self.get_scalings(sigma)]
-        return self.inner_model(input * c_in, sigma, **kwargs) * c_out + input * c_skip
-
-
-class DenoiserWithVariance(Denoiser):
-    def loss(self, input, noise, sigma, **kwargs):
-        c_skip, c_out, c_in = [utils.append_dims(x, input.ndim) for x in self.get_scalings(sigma)]
-        noised_input = input + noise * utils.append_dims(sigma, input.ndim)
-        model_output, logvar = self.inner_model(noised_input * c_in, sigma, return_variance=True, **kwargs)
-        logvar = utils.append_dims(logvar, model_output.ndim)
-        target = (input - c_skip * noised_input) / c_out
-        losses = ((model_output - target) ** 2 / logvar.exp() + logvar) / 2
-        return losses.flatten(1).mean(1) * self.weighting(sigma)
-
-
-class SimpleLossDenoiser(Denoiser):
-    """L_simple with the Karras et al. preconditioner."""
-
-    def loss(self, input, noise, sigma, **kwargs):
-        noised_input = input + noise * utils.append_dims(sigma, input.ndim)
-        denoised = self(noised_input, sigma, **kwargs)
-        eps = sampling.to_d(noised_input, sigma, denoised)
-        return (eps - noise).pow(2).flatten(1).mean(1) * self.weighting(sigma)
-
-
-class SimpleLossXDenoiser(Denoiser):
-    """L_simple with the Karras et al. preconditioner."""
-
-    def loss(self, input, noise, sigma, **kwargs):
-        noised_input = input + noise * utils.append_dims(sigma, input.ndim)
-        denoised = self(noised_input, sigma, **kwargs)
-        return (denoised - input).pow(2).flatten(1).mean(1) * self.weighting(sigma)
+from . import utils
 
 
 # Residual blocks
@@ -488,4 +369,3 @@ class Atan(nn.Module):
 
     def forward(self, x):
         return torch.atan(x)
-

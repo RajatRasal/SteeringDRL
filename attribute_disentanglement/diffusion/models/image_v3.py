@@ -3,7 +3,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from .. import layers, utils
-from attribute_disentanglement.diffusion.models.image_v2 import DBlock, UBlock, BottleneckBlock, MappingNet
+from attribute_disentanglement.diffusion.models.unet_blocks import DBlock, UBlock, BottleneckBlock, MappingNet
 
 
 class ImageDenoiserModelV3(nn.Module):
