@@ -987,27 +987,3 @@ class ImageDenoiserModelV4(nn.Module):
 
         out = self.out(h)
         return out
-
-
-if __name__ == "__main__":
-    import attribute_disentanglement.diffusion as K
-    files = [
-        # "./configs_final/shapes3d/B.json",
-        "./configs_final/voc/test0.json",
-    ]
-    for file in files:
-        device = th.device("cuda")
-        config = K.config.load_config(file)
-        model_config = config["model"]
-        size = model_config["input_size"]
-        model = K.config.make_model(config).to(device)
-        vqvae = K.config.make_vqvae(config).to(device)
-
-        # x = th.zeros([1, model_config['input_channels'], size[0] * 4, size[1] * 4], device=device)
-        x = th.zeros([1, model_config['input_channels'], 224, 224], device=device)
-        x = vqvae.encode(x)
-        print(x.shape)
-        # conds = th.ones([1, 10, 16], device=device)
-        conds = th.ones([1, 6, 192], device=device)
-        t = th.ones([1], device=device)
-        model(x, t, conds)

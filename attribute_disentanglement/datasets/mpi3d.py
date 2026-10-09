@@ -29,16 +29,9 @@ import tensorflow as tf
 class MPI3D(ground_truth_data.GroundTruthData):
   """MPI3D dataset.
 
-  MPI3D datasets have been introduced as a part of NEURIPS 2019 Disentanglement
-  Competition.(http://www.disentanglement-challenge.com).
-  There are three different datasets:
-  1. Simplistic rendered images (mpi3d_toy).
-  2. Realistic rendered images (mpi3d_realistic).
-  3. Real world images (mpi3d_real).
-
-  Currently only mpi3d_toy is publicly available. More details about this
-  dataset can be found in "On the Transfer of Inductive Bias from Simulation to
-  the Real World: a New Disentanglement Dataset"
+  This module loads the publicly available toy rendering of MPI3D. More
+  details can be found in "On the Transfer of Inductive Bias from Simulation
+  to the Real World: a New Disentanglement Dataset"
   (https://arxiv.org/abs/1906.03292).
 
   The ground-truth factors of variation in the dataset are:
@@ -53,42 +46,15 @@ class MPI3D(ground_truth_data.GroundTruthData):
   6 - Second DOF (40 different values)
   """
 
-  def __init__(self, mode="mpi3d_toy"):
-    if mode == "mpi3d_toy":
-      mpi3d_path = os.path.join(
-          "./datasets","mpi3d_toy.npz")
-      if not tf.io.gfile.exists(mpi3d_path):
-        raise ValueError(
-            "Dataset '{}' not found. Make sure the dataset is publicly available and downloaded correctly."
-            .format(mode))
-      else:
-        with tf.io.gfile.GFile(mpi3d_path, "rb") as f:
-          data = np.load(f)
-      self.factor_sizes = [4, 4, 2, 3, 3, 40, 40]
-    elif mode == "mpi3d_realistic":
-      mpi3d_path = os.path.join(
-          "./datasets", "mpi3d_realistic.npz")
-      if not tf.io.gfile.exists(mpi3d_path):
-        raise ValueError(
-            "Dataset '{}' not found. Make sure the dataset is publicly available and downloaded correctly."
-            .format(mode))
-      else:
-        with tf.io.gfile.GFile(mpi3d_path, "rb") as f:
-          data = np.load(f)
-      self.factor_sizes = [4, 4, 2, 3, 3, 40, 40]
-    elif mode == "mpi3d_real":
-      mpi3d_path = os.path.join(
-          "./datasets","mpi3d_real.npz")
-      if not tf.io.gfile.exists(mpi3d_path):
-        raise ValueError(
-            "Dataset '{}' not found. Make sure the dataset is publicly available and downloaded correctly."
-            .format(mode))
-      else:
-        with tf.io.gfile.GFile(mpi3d_path, "rb") as f:
-          data = np.load(f)
-      self.factor_sizes = [6, 6, 2, 3, 3, 40, 40]
-    else:
-      raise ValueError("Unknown mode provided.")
+  def __init__(self):
+    mpi3d_path = os.path.join("./datasets", "mpi3d_toy.npz")
+    if not tf.io.gfile.exists(mpi3d_path):
+      raise ValueError(
+          "Dataset 'mpi3d_toy' not found. Make sure the dataset is downloaded."
+      )
+    with tf.io.gfile.GFile(mpi3d_path, "rb") as f:
+      data = np.load(f)
+    self.factor_sizes = [4, 4, 2, 3, 3, 40, 40]
 
     self.images = data["images"]
     self.latent_factor_indices = [0, 1, 2, 3, 4, 5, 6]

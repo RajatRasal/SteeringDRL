@@ -93,7 +93,7 @@ def load_config(path_or_dict):
             'loss_scales': 1,
         },
         'dataset': {
-            'type': 'imagefolder',
+            'type': 'shapes3d',
             'num_classes': 0,
             'cond_dropout_rate': 0.1,
         },
@@ -149,7 +149,14 @@ def load_config(path_or_dict):
             config['model']['dropout_rate'] = [0.0] * len(config['model']['widths'])
         elif isinstance(config['model']['dropout_rate'], float):
             config['model']['dropout_rate'] = [config['model']['dropout_rate']] * len(config['model']['widths'])
-    return merge(defaults, config)
+    config = merge(defaults, config)
+    supported_datasets = {'shapes3d', 'cars3d', 'mpi3d'}
+    if config['dataset']['type'] not in supported_datasets:
+        raise ValueError(
+            f"Unsupported dataset {config['dataset']['type']!r}; "
+            f"choose one of {sorted(supported_datasets)}"
+        )
+    return config
 
 
 def make_model(config):
@@ -346,9 +353,8 @@ def make_model(config):
 
 
 def make_encoder(config):
-    if config['encoder']['type'] != 'slot':
-        internal_dim = config['encoder']['internal_dim']
-        context_dim = config['encoder']['context_dim']
+    internal_dim = config['encoder']['internal_dim']
+    context_dim = config['encoder']['context_dim']
 
     if config['encoder']['type'] == 'image':
         latent_units = config['encoder']['latent_units']
@@ -381,12 +387,6 @@ def make_encoder(config):
             input_layer=config['encoder'].get('input_layer', 'resblock'),
             flatten=config['encoder'].get('flatten', 'linear'),
         )
-    elif config['encoder']['type'] == 'slot':
-        return models.SlotEncoder(
-            resolution=(128, 128) if config['dataset']['type'] == 'clevrtex' else (224, 224),
-            slot_dict=config['encoder']['slot_dict'],
-            enc_dict=config['encoder']['enc_dict'],
-        )
     elif config['encoder']['type'] == 'label':
         dataset_obj = named_data.get_named_ground_truth_data(config['dataset']['type'])
         return models.LabelEncoder(
@@ -400,65 +400,38 @@ def make_encoder(config):
 
 
 VQVAE_CKPT_PATHS = {
-    # 'shapes3d': 'ckpts/vqvae/2_shapes3d_True_32_128_5e-05/training-state-030000.pth',
-    # 'mpi3d': 'ckpts/vqvae/0_mpi3d_True_32_128_5e-05/training-state-030000.pth',
-    # 'cars3d': 'ckpts/vqvae/0_cars3d_True_32_128_5e-05/training-state-030000.pth',
-
     'shapes3d': 'ckpts/vqvae/0_shapes3d_True_32_128_5e-05_new/training-state-150000.pth',
     'mpi3d': 'ckpts/vqvae/0_mpi3d_True_32_128_5e-05_new/training-state-150000.pth',
     'cars3d': 'ckpts/vqvae/0_cars3d_True_32_128_5e-05_new/training-state-150000.pth',
-
-    'clevrtex': 'ckpts/vqvae/clevrtex/vqvae_clevrtex_params-res128.pth',
-    'coco': 'ckpts/vqvae/coco/vqvae_coco_params-res224.pth',
-    'voc': 'ckpts/vqvae/voc/vqvae_voc_params-res224.pth',
 }
 
 def make_vqvae(config):
     dataset = config['dataset']['type']
+    if dataset not in VQVAE_CKPT_PATHS:
+        raise ValueError(f'Unsupported dataset for attribute disentanglement: {dataset}')
     # Allow experiments to pin their VQ-VAE in the copied JSON config.  Falling
     # back to the global mapping preserves existing configurations.
     path = config['dataset'].get('vqvae_checkpoint')
     if path is None:
         path = VQVAE_CKPT_PATHS[dataset]
     print(f"VQ-VAE checkpoint: {path}")
-    if dataset in ['shapes3d', 'mpi3d', 'cars3d']:
-        ckpt = torch.load(path, map_location='cpu', weights_only=True)
-        vqvae = VQVAE(
-            enc_dec_dict=dict(
-                resolution=64,
-                in_channels=3,
-                z_channels=3,
-                ch=32,
-                ch_mult=[1, 2, 4],
-                num_res_blocks=2,
-                attn_resolutions=[],
-                out_ch=3,
-                dropout=0.0,
-            ),
-            vq_dict=dict(n_embed=2048, embed_dim=3),
-        )
-        vqvae.load_state_dict(ckpt, strict=True)
-        vqvae.eval().requires_grad_(False)
-    else:        
-        ckpt = torch.load(path, map_location='cpu')
-        vqvae = VQVAE(
-            enc_dec_dict=dict(
-                resolution=128 if dataset == 'clevrtex' else 224,
-                in_channels=3,
-                z_channels=3,
-                ch=64,  # base_channel
-                ch_mult=[1, 2, 4],  # num_down = len(ch_mult)-1
-                num_res_blocks=2,
-                attn_resolutions=[],
-                out_ch=3,
-                dropout=0.0,
-            ),
-            vq_dict=dict(
-                n_embed=4096,  # vocab_size
-                embed_dim=3,  # same as `z_channels`
-            ),
-        )
-        vqvae.load_state_dict(ckpt, strict=True)
+    ckpt = torch.load(path, map_location='cpu', weights_only=True)
+    vqvae = VQVAE(
+        enc_dec_dict=dict(
+            resolution=64,
+            in_channels=3,
+            z_channels=3,
+            ch=32,
+            ch_mult=[1, 2, 4],
+            num_res_blocks=2,
+            attn_resolutions=[],
+            out_ch=3,
+            dropout=0.0,
+        ),
+        vq_dict=dict(n_embed=2048, embed_dim=3),
+    )
+    vqvae.load_state_dict(ckpt, strict=True)
+    vqvae.eval().requires_grad_(False)
     if 'vqvae_scale_factor' in config['dataset']:
         if config['dataset']['vqvae_scale_factor']:
             scale_factor_path = config['dataset'].get(

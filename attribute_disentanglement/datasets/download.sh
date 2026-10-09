@@ -24,20 +24,6 @@ if [[ ! -d "cars" ]]; then
 fi
 echo "Downloading cars completed!"
 
-echo "Downloading dSprites dataset."
-if [[ ! -d "dsprites" ]]; then
-  mkdir dsprites
-  wget -O dsprites/dsprites_ndarray_co1sh3sc6or40x32y32_64x64.npz https://github.com/deepmind/dsprites-dataset/raw/master/dsprites_ndarray_co1sh3sc6or40x32y32_64x64.npz
-fi
-echo "Downloading dSprites completed!"
-
-echo "Downloading scream picture."
-if [[ ! -d "scream" ]]; then
-  mkdir scream
-  wget -O scream/scream.jpg https://upload.wikimedia.org/wikipedia/commons/f/f4/The_Scream.jpg
-fi
-echo "Downloading scream completed!"
-
 echo "Downloading mpi3d_toy dataset."
 if [[ ! -d "mpi3d_toy" ]]; then
   mkdir mpi3d_toy

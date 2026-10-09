@@ -15,11 +15,7 @@ def get_named_ground_truth_data(name):
   if name == "cars3d":
     return cars3d.Cars3D()
   elif name == "mpi3d":
-    return mpi3d.MPI3D(mode="mpi3d_toy")
-  elif name == "mpi3d_realistic":
-    return mpi3d.MPI3D(mode="mpi3d_realistic")
-  elif name == "mpi3d_real":
-    return mpi3d.MPI3D(mode="mpi3d_real")
+    return mpi3d.MPI3D()
   elif name == "shapes3d":
     return shapes3d.Shapes3D()
   else:

@@ -13,5 +13,5 @@ wandb/*
 slurm_logs*
 *.png
 
-datasets
+datasets/*
 ckpts
