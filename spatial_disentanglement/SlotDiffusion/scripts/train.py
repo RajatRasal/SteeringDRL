@@ -9,8 +9,8 @@ import wandb
 
 import torch
 
-from spatial_disentanglement.nerv.nerv.utils import mkdir_or_exist
-from spatial_disentanglement.nerv.nerv.training import BaseDataModule
+from spatial_disentanglement.nerv.utils import mkdir_or_exist
+from spatial_disentanglement.nerv.training import BaseDataModule
 
 
 def main(params):

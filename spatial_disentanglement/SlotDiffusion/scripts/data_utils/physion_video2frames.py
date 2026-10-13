@@ -1,7 +1,7 @@
 import os
 from concurrent import futures as futures
 
-from spatial_disentanglement.nerv.nerv.utils import VideoReader, load_obj
+from spatial_disentanglement.nerv.utils import VideoReader, load_obj
 
 data_root = './data/Physion'
 NUM_FRAMES = 200

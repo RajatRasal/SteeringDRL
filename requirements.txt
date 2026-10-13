@@ -5,7 +5,6 @@ einops
 jsonmerge
 kornia
 Pillow
-safetensors
 scikit-image
 scipy
 torch>=2.1

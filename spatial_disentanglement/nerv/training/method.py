@@ -12,12 +12,12 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.distributed as dist
 
-from spatial_disentanglement.nerv.nerv.utils import mkdir_or_exist, AverageMeter, MeanMetric, sort_file_by_time, ddp_all_gather, is_list_of, glob_all
-from spatial_disentanglement.nerv.nerv.training.lr import get_lr
-from spatial_disentanglement.nerv.nerv.training.model import BaseModel
-from spatial_disentanglement.nerv.nerv.training.params import BaseParams
-from spatial_disentanglement.nerv.nerv.training.datamodule import BaseDataModule
-from spatial_disentanglement.nerv.nerv.models.utils import filter_wd_parameters
+from spatial_disentanglement.nerv.utils import mkdir_or_exist, AverageMeter, MeanMetric, sort_file_by_time, ddp_all_gather, is_list_of, glob_all
+from spatial_disentanglement.nerv.training.lr import get_lr
+from spatial_disentanglement.nerv.training.model import BaseModel
+from spatial_disentanglement.nerv.training.params import BaseParams
+from spatial_disentanglement.nerv.training.datamodule import BaseDataModule
+from spatial_disentanglement.nerv.models.utils import filter_wd_parameters
 
 
 class BaseMethod(nn.Module):

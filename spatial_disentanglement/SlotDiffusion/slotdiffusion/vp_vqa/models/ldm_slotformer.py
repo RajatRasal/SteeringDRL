@@ -3,7 +3,7 @@ import os
 import torch
 import torch.nn.functional as F
 
-from spatial_disentanglement.nerv.nerv.training import BaseModel
+from spatial_disentanglement.nerv.training import BaseModel
 
 from spatial_disentanglement.SlotDiffusion.slotdiffusion.vp_vqa.models.slotformer import SlotFormer
 

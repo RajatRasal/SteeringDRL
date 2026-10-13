@@ -6,9 +6,9 @@ import importlib
 
 import torch
 
-from spatial_disentanglement.nerv.nerv.models import build_model
-from spatial_disentanglement.nerv.nerv.method import build_method
-from spatial_disentanglement.nerv.nerv.datasets import build_dataset
+from spatial_disentanglement.nerv.models import build_model
+from spatial_disentanglement.nerv.method import build_method
+from spatial_disentanglement.nerv.datasets import build_dataset
 
 
 def load_params(params):

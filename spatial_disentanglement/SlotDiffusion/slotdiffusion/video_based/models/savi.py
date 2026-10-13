@@ -2,8 +2,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from spatial_disentanglement.nerv.nerv.training import BaseModel
-from spatial_disentanglement.nerv.nerv.models import deconv_out_shape, conv_norm_act, deconv_norm_act
+from spatial_disentanglement.nerv.training import BaseModel
+from spatial_disentanglement.nerv.models import deconv_out_shape, conv_norm_act, deconv_norm_act
 
 from spatial_disentanglement.SlotDiffusion.slotdiffusion.video_based.models.resnet import resnet18, resnet34
 from spatial_disentanglement.SlotDiffusion.slotdiffusion.video_based.models.dino import dino

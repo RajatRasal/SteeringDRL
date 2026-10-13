@@ -7,7 +7,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 import torchvision.utils as vutils
 
-from spatial_disentanglement.nerv.nerv.training import BaseMethod, CosineAnnealingWarmupRestarts
+from spatial_disentanglement.nerv.training import BaseMethod, CosineAnnealingWarmupRestarts
 
 from spatial_disentanglement.SlotDiffusion.slotdiffusion.img_based.models import to_rgb_from_tensor, get_lr, cosine_anneal
 from spatial_disentanglement.SlotDiffusion.slotdiffusion.img_based.datasets import draw_coco_bbox

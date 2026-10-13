@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 import torch
 
-from spatial_disentanglement.nerv.nerv.utils import dump_obj, mkdir_or_exist
+from spatial_disentanglement.nerv.utils import dump_obj, mkdir_or_exist
 
 from spatial_disentanglement.SlotDiffusion.slotdiffusion.vp_vqa.models import build_model
 from spatial_disentanglement.SlotDiffusion.slotdiffusion.vp_vqa.datasets import build_dataset

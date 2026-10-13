@@ -5,7 +5,7 @@ import numpy as np
 
 import torch
 
-from spatial_disentanglement.nerv.nerv.utils.tensor import to_numpy
+from spatial_disentanglement.nerv.utils.tensor import to_numpy
 
 
 def datetime2str(form='%Y-%m-%d_%H-%M-%S'):

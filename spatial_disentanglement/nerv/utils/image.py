@@ -4,8 +4,8 @@ import cv2
 import six
 import numpy as np
 
-from spatial_disentanglement.nerv.nerv.utils.misc import convert4save
-from spatial_disentanglement.nerv.nerv.utils.io import check_file_exist, mkdir_or_exist
+from spatial_disentanglement.nerv.utils.misc import convert4save
+from spatial_disentanglement.nerv.utils.io import check_file_exist, mkdir_or_exist
 
 
 def read_img(img_or_path, flag=cv2.IMREAD_COLOR):

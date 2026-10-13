@@ -3,7 +3,7 @@ import torch.nn.functional as F
 
 from spatial_disentanglement.SlotDiffusion.slotdiffusion.video_based.models.steve.steve_utils import Conv2dBlock, conv2d, gumbel_softmax, make_one_hot
 
-from spatial_disentanglement.nerv.nerv.training import BaseModel
+from spatial_disentanglement.nerv.training import BaseModel
 
 
 class dVAE(BaseModel):

@@ -6,8 +6,8 @@ from tqdm import tqdm
 
 import torch
 
-from spatial_disentanglement.nerv.nerv.utils import AverageMeter
-from spatial_disentanglement.nerv.nerv.training import BaseDataModule
+from spatial_disentanglement.nerv.utils import AverageMeter
+from spatial_disentanglement.nerv.training import BaseDataModule
 
 from spatial_disentanglement.SlotDiffusion.slotdiffusion.video_based.models import build_model
 from spatial_disentanglement.SlotDiffusion.slotdiffusion.video_based.models import ARI_metric, fARI_metric, miou_metric, fmiou_metric, mbo_metric

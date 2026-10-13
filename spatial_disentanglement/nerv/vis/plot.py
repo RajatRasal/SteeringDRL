@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-from spatial_disentanglement.nerv.nerv.utils import to_numpy
+from spatial_disentanglement.nerv.utils import to_numpy
 
 
 def get_lim(x):

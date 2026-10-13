@@ -5,7 +5,7 @@ import numpy as np
 import torch
 import torchvision.utils as vutils
 
-from spatial_disentanglement.nerv.nerv.training import BaseMethod, CosineAnnealingWarmupRestarts
+from spatial_disentanglement.nerv.training import BaseMethod, CosineAnnealingWarmupRestarts
 
 from torch.utils.data._utils.collate import default_collate
 

@@ -12,9 +12,9 @@ from cv2 import (CAP_PROP_FRAME_WIDTH, CAP_PROP_FRAME_HEIGHT, CAP_PROP_FPS,
                  VideoWriter_fourcc)
 from moviepy.editor import VideoFileClip, clips_array
 
-from spatial_disentanglement.nerv.nerv.utils.image import resize
-from spatial_disentanglement.nerv.nerv.utils.misc import convert4save
-from spatial_disentanglement.nerv.nerv.utils.io import check_file_exist, mkdir_or_exist, scandir, get_suffix
+from spatial_disentanglement.nerv.utils.image import resize
+from spatial_disentanglement.nerv.utils.misc import convert4save
+from spatial_disentanglement.nerv.utils.io import check_file_exist, mkdir_or_exist, scandir, get_suffix
 
 
 class Cache(object):

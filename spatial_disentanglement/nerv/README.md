@@ -24,7 +24,8 @@ Greatly inspired by and lots of code borrowed from:
 ## Installation
 
 -   Manually install PyTorch with cuda support (see `requirements.txt` for versions we tested)
--   Run `pip install -e .` to install the whole package
+-   Run commands from the repository root so imports under
+    `spatial_disentanglement.nerv` resolve correctly.
 
 ### Possible Issues
 
@@ -33,7 +34,7 @@ Greatly inspired by and lots of code borrowed from:
     Therefore, if you launch two runs with the same config file (even if their content are different), your new run might load the checkpoints from the old run.
     Instead, you should copy the config file to a new file, re-name it (potentially doing some modifications to test new settings), and thus avoid detecting old checkpoints.
 
-    If you just want to run the same config file multiple times (e.g. 3 random seeds), you should use the [dup_run_sbatch.sh](./nerv/scripts/dup_run_sbatch.sh) script, which adds different suffix to differentiate the config files.
+    If you just want to run the same config file multiple times (e.g. 3 random seeds), you should use the [dup_run_sbatch.sh](./scripts/dup_run_sbatch.sh) script, which adds different suffix to differentiate the config files.
 
 -   When you run the code with multi-GPU, we have implemented DDP in the Trainer.
     Please replace

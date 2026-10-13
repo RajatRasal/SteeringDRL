@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from spatial_disentanglement.nerv.nerv.training import BaseModel
+from spatial_disentanglement.nerv.training import BaseModel
 
 
 def get_sin_pos_enc(seq_len, d_model):

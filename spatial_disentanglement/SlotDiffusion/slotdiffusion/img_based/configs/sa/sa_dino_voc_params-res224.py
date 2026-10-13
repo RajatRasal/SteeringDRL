@@ -1,4 +1,4 @@
-from spatial_disentanglement.nerv.nerv.training import BaseParams
+from spatial_disentanglement.nerv.training import BaseParams
 
 
 class SlotAttentionParams(BaseParams):

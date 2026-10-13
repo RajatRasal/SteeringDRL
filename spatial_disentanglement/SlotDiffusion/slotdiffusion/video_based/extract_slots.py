@@ -9,7 +9,7 @@ from tqdm import tqdm
 import torch
 from torch.utils.data._utils.collate import default_collate
 
-from spatial_disentanglement.nerv.nerv.utils import dump_obj, mkdir_or_exist
+from spatial_disentanglement.nerv.utils import dump_obj, mkdir_or_exist
 
 from spatial_disentanglement.SlotDiffusion.slotdiffusion.video_based.models import build_model
 from spatial_disentanglement.SlotDiffusion.slotdiffusion.video_based.datasets import build_dataset

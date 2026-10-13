@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-from spatial_disentanglement.nerv.nerv.utils import to_numpy, assert_array_shape
+from spatial_disentanglement.nerv.utils import to_numpy, assert_array_shape
 
 
 def np_to_o3d_pointcloud(xyz, color=None):

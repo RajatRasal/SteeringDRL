@@ -8,8 +8,8 @@ from PIL import Image
 
 import torch
 
-from spatial_disentanglement.nerv.nerv.training import BaseDataModule
-from spatial_disentanglement.nerv.nerv.utils import load_obj, dump_obj
+from spatial_disentanglement.nerv.training import BaseDataModule
+from spatial_disentanglement.nerv.utils import load_obj, dump_obj
 
 from spatial_disentanglement.SlotDiffusion.slotdiffusion.img_based.models import build_model, to_rgb_from_tensor
 from spatial_disentanglement.SlotDiffusion.slotdiffusion.img_based.datasets import build_dataset

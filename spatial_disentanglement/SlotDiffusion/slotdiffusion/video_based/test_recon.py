@@ -9,8 +9,8 @@ from PIL import Image
 import torch
 import lpips
 
-from spatial_disentanglement.nerv.nerv.training import BaseDataModule
-from spatial_disentanglement.nerv.nerv.utils import load_obj, dump_obj, save_video
+from spatial_disentanglement.nerv.training import BaseDataModule
+from spatial_disentanglement.nerv.utils import load_obj, dump_obj, save_video
 
 from spatial_disentanglement.SlotDiffusion.slotdiffusion.video_based.models import build_model, to_rgb_from_tensor
 from spatial_disentanglement.SlotDiffusion.slotdiffusion.video_based.models import mse_metric, psnr_metric, ssim_metric, perceptual_dist

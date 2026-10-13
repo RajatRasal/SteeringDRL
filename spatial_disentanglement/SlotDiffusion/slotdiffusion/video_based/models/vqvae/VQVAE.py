@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from spatial_disentanglement.nerv.nerv.training import BaseModel
+from spatial_disentanglement.nerv.training import BaseModel
 
 from spatial_disentanglement.SlotDiffusion.slotdiffusion.video_based.models.vqvae.modules import Encoder, Decoder
 from spatial_disentanglement.SlotDiffusion.slotdiffusion.video_based.models.vqvae.quantize import VectorQuantizer2 as VectorQuantizer
